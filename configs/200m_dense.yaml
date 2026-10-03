@@ -1,0 +1,60 @@
+# SCICOMP26 dense decoder-only Transformer baseline.
+# Model and training settings are kept in one versioned configuration.
+
+run:
+  name: dense_200m_baseline
+  seed: 42
+
+model:
+  type: dense_decoder_only
+  num_layers: 16
+  hidden_size: 896
+  num_attention_heads: 14
+  head_dim: 64
+  intermediate_size: 2432
+  activation: swiglu
+  normalization: rmsnorm
+  rms_norm_eps: 1.0e-5
+  position_encoding: rope
+  rope_theta: 10000
+  context_length: 1024
+  vocab_size: null  # Set from the selected tokenizer.
+  tie_word_embeddings: true
+  attention_bias: false
+  mlp_bias: false
+  dropout: 0.0
+
+training:
+  dtype: bfloat16
+  max_steps: null
+  micro_batch_size: 1
+  gradient_accumulation_steps: 1
+  gradient_checkpointing: false
+
+optimizer:
+  name: adamw
+  learning_rate: null
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+  weight_decay: 0.1
+
+scheduler:
+  name: cosine
+  warmup_steps: null
+
+data:
+  tokenizer_path: null
+  train_path: null
+  validation_path: null
+  format: npy_packed_tokens
+
+logging:
+  backend: wandb
+  entity: echo-lab
+  project: scicomp26
+  log_every_steps: 10
+  eval_every_steps: 100
+  checkpoint_every_steps: 100
+
+output:
+  directory: runs/dense_200m_baseline
