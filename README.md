@@ -20,6 +20,8 @@ python scripts/train.py \
   --max-steps 10
 ```
 
+需要记录到 Weights & Biases 时，在训练命令末尾加上 `--wandb`；不加该参数则只保存本地日志和 checkpoint。
+
 从 checkpoint 继续训练：
 
 ```bash
