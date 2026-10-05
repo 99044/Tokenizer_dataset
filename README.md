@@ -34,3 +34,7 @@ python scripts/train.py \
 
 合成数据只用于验证训练、评估和恢复流程。真实数据目录应遵循
 [`docs/data_interface.md`](docs/data_interface.md) 的定义。
+
+## Data release
+
+真实数据的服务器位置、内容范围、记录格式和示例见 [`docs/DATA_LOCATION.md`](docs/DATA_LOCATION.md)。
