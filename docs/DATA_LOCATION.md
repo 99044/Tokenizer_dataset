@@ -26,7 +26,7 @@ Representative content patterns include:
 - A web-page fragment containing a title, body text, links, or navigation text.
 - Product, catalog, review, story, forum, and other web-published text.
 
-Two complete records from the validated smoke samples are provided verbatim in [`docs/data_examples.jsonl`](data_examples.jsonl). The source mixture may contain mature, offensive, commercial, and otherwise sensitive language.
+Ten complete records from the validated smoke samples are provided verbatim in [`docs/data_examples.jsonl`](data_examples.jsonl). The source mixture may contain mature, offensive, commercial, and otherwise sensitive language.
 
 ## Record format
 
@@ -51,4 +51,4 @@ Use `data/splits_v2/manifest.json` as the authoritative split and record-count d
 
 ## Complete record examples
 
-Two verbatim records selected from the validated smoke samples are stored in [`docs/data_examples.jsonl`](data_examples.jsonl). The file preserves the original `id` and `text` fields and is intended to show the exact JSONL projection used by the release.
+Ten verbatim records selected from the validated smoke samples are stored in [`docs/data_examples.jsonl`](data_examples.jsonl). The file preserves the original `id` and `text` fields and is intended to show the exact JSONL projection used by the release.
