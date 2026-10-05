@@ -24,8 +24,9 @@ Representative content patterns include:
 - A programming or configuration fragment, such as a short C/C++/C# or scripting example.
 - A question followed by a multi-sentence answer or worked explanation.
 - A web-page fragment containing a title, body text, links, or navigation text.
+- Product, catalog, review, story, forum, and other web-published text.
 
-These examples are paraphrased format examples, not verbatim excerpts from the corpus. The source mixture may contain mature, offensive, or otherwise sensitive language; the repository does not reproduce such text in this description.
+Two complete records from the validated smoke samples are provided verbatim in [`docs/data_examples.jsonl`](data_examples.jsonl). The source mixture may contain mature, offensive, commercial, and otherwise sensitive language.
 
 ## Record format
 
@@ -47,3 +48,7 @@ This path is server-local and is not created by cloning the repository. Access r
 ## Reproduction and verification
 
 Use `data/splits_v2/manifest.json` as the authoritative split and record-count description and `data/splits_v2/verification.json` for shard validation. The tracked `sample_train_10000.jsonl.zst` and `sample_dev_1000.jsonl.zst` are smoke-test samples only; they are not substitutes for the full corpus. After mounting or copying the server tree, verify the expected shard names, record counts, decompression and JSON parsing, and `bad_json=0` before training.
+
+## Complete record examples
+
+Two verbatim records selected from the validated smoke samples are stored in [`docs/data_examples.jsonl`](data_examples.jsonl). The file preserves the original `id` and `text` fields and is intended to show the exact JSONL projection used by the release.
