@@ -5,6 +5,7 @@ import argparse
 import json
 import math
 import os
+import sys
 import time
 from contextlib import nullcontext
 from datetime import timedelta
@@ -51,6 +52,10 @@ def main():
     p.add_argument('--eval-batches', type=int, default=2)
     p.add_argument('--save-every', type=int, default=10)
     p.add_argument('--resume', type=Path)
+    p.add_argument('--wandb', action='store_true', help='Upload metrics to W&B from rank 0')
+    p.add_argument('--wandb-entity', help='Override the configured W&B entity')
+    p.add_argument('--wandb-project', help='Override the configured W&B project')
+    p.add_argument('--wandb-name', help='W&B run name (default: output directory name)')
     args = p.parse_args()
     for name in ['max_steps', 'micro_batch_size', 'grad_accum_steps', 'eval_every', 'eval_batches', 'save_every']:
         if getattr(args, name) <= 0:
@@ -73,6 +78,7 @@ def main():
     if not torch.cuda.is_bf16_supported():
         raise RuntimeError('本配置需要支持 BF16 的 GPU')
     dist.init_process_group('nccl', timeout=timedelta(minutes=30))
+    wandb_run = None
     try:
         metadata = json.loads((args.data_dir / 'metadata.json').read_text())
         vocab_size = int(metadata['vocab_size'])
@@ -129,6 +135,33 @@ def main():
             args.output_dir.mkdir(parents=True, exist_ok=True)
             (args.output_dir / 'run-plan.json').write_text(json.dumps(plan, indent=2, ensure_ascii=False))
             print(f'params={count_parameters(model):,} world_size={world} global_batch={global_batch} tokens_per_step={global_batch * context_length}', flush=True)
+        if args.wandb:
+            # Propagate initialization failures so other ranks do not wait in training collectives.
+            wandb_error = [None]
+            if rank == 0:
+                try:
+                    import wandb
+
+                    logging = settings['logging']
+                    wandb_run = wandb.init(
+                        entity=args.wandb_entity or logging['entity'],
+                        project=args.wandb_project or logging['project'],
+                        name=args.wandb_name or args.output_dir.name,
+                        config=plan,
+                        dir=str(args.output_dir),
+                        mode='online',
+                        settings=wandb.Settings(init_timeout=60),
+                    )
+                    if wandb_run is None:
+                        raise RuntimeError('W&B did not create a run')
+                    run_info = dict(id=wandb_run.id, url=wandb_run.url)
+                    (args.output_dir / 'wandb-run.json').write_text(json.dumps(run_info, indent=2))
+                    print(f'W&B run: {wandb_run.url}', flush=True)
+                except Exception as error:
+                    wandb_error[0] = f'{type(error).__name__}: {error}'
+            dist.broadcast_object_list(wandb_error, src=0)
+            if wandb_error[0]:
+                raise RuntimeError(f'W&B initialization failed: {wandb_error[0]}')
         dist.barrier()
         run_started = time.perf_counter()
 
@@ -172,6 +205,8 @@ def main():
                 print(json.dumps(metrics), flush=True)
                 with (args.output_dir / 'metrics.jsonl').open('a') as log:
                     log.write(json.dumps(metrics) + '\n')
+                if wandb_run is not None:
+                    wandb_run.log(metrics, step=step)
 
             if step % args.save_every == 0 or step == stop_step:
                 rng = {'cpu': torch.get_rng_state(), 'cuda': torch.cuda.get_rng_state(device)}
@@ -187,7 +222,12 @@ def main():
                     temporary.replace(path)
                 dist.barrier()
     finally:
-        dist.destroy_process_group()
+        failed = sys.exc_info()[0] is not None
+        try:
+            if wandb_run is not None:
+                wandb_run.finish(exit_code=1 if failed else 0)
+        finally:
+            dist.destroy_process_group()
 
 
 if __name__ == '__main__':
