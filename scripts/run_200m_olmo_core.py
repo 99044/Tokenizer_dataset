@@ -9,7 +9,7 @@ from pathlib import Path
 import torch
 import torch.nn.functional as F
 
-from model_config import build_model_config, count_parameters, tie_output_weights
+from comp.scicomp26.scripts.model_config import build_model_config, count_parameters, tie_output_weights
 
 
 def main() -> None:
