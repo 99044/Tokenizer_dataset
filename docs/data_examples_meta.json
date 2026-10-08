@@ -1,0 +1,76 @@
+{
+  "selection_method": "seeded_balanced_display_sample",
+  "seed": 20261008,
+  "source_files": {
+    "train": "sample_train_10000.jsonl.zst",
+    "dev": "sample_dev_1000.jsonl.zst"
+  },
+  "allocation": {
+    "train": 5,
+    "dev": 5
+  },
+  "candidate_constraints": {
+    "min_text_chars": 500,
+    "max_text_chars": 20000,
+    "exclude_high_confidence": [
+      "direct email addresses",
+      "telephone numbers",
+      "specific contact details",
+      "credentials or API keys",
+      "obvious adult-content markers"
+    ]
+  },
+  "record_order": "first five lines are train; final five lines are dev",
+  "records": [
+    {
+      "line": 1,
+      "split": "train",
+      "id": "c233c31d-ef75-4139-ba85-9f8fe3d259a3"
+    },
+    {
+      "line": 2,
+      "split": "train",
+      "id": "b6fb4911-2180-4bb8-a7bc-3dd3c10dc7e1"
+    },
+    {
+      "line": 3,
+      "split": "train",
+      "id": "53a3640a-b952-4142-81c9-2ba07ae2f75a"
+    },
+    {
+      "line": 4,
+      "split": "train",
+      "id": "89799d91-c1a1-45de-ad6d-8aa1be8af7e4"
+    },
+    {
+      "line": 5,
+      "split": "train",
+      "id": "2c364944-3219-4c21-ac06-0328f825f977"
+    },
+    {
+      "line": 6,
+      "split": "dev",
+      "id": "d52e199c-03b8-45fd-b63a-cbe22e899cee"
+    },
+    {
+      "line": 7,
+      "split": "dev",
+      "id": "d044f3ee-561c-4950-a6d1-f37abf061a1d"
+    },
+    {
+      "line": 8,
+      "split": "dev",
+      "id": "24416bf9-d8d9-4962-9ee9-8a1e89dcc622"
+    },
+    {
+      "line": 9,
+      "split": "dev",
+      "id": "383ba1c4-1f15-4e38-b410-9e48f204b4d5"
+    },
+    {
+      "line": 10,
+      "split": "dev",
+      "id": "c12c1dd9-1cfa-4774-8f67-cfc771c1be03"
+    }
+  ]
+}

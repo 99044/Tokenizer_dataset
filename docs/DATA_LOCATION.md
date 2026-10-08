@@ -26,7 +26,7 @@ Representative content patterns include:
 - A web-page fragment containing a title, body text, links, or navigation text.
 - Product, catalog, review, story, forum, and other web-published text.
 
-Ten complete records from the validated smoke samples are provided verbatim in [`docs/data_examples.jsonl`](data_examples.jsonl). The source mixture may contain mature, offensive, commercial, and otherwise sensitive language.
+Ten complete records from the validated smoke samples are provided verbatim in [`docs/data_examples.jsonl`](data_examples.jsonl). The file is a reproducible balanced display sample: five train records and five dev records, selected with seed `20261008` after restricting examples to 500–20,000 characters and excluding high-confidence direct contact details, credentials, and obvious adult-content markers. The selected texts are not rewritten or summarized. This is an illustrative sample, not a statistical estimate of full-corpus proportions. The source mixture may contain mature, offensive, commercial, and otherwise sensitive language.
 
 ## Record format
 
@@ -51,4 +51,4 @@ Use `data/splits_v2/manifest.json` as the authoritative split and record-count d
 
 ## Complete record examples
 
-Ten verbatim records selected from the validated smoke samples are stored in [`docs/data_examples.jsonl`](data_examples.jsonl). The file preserves the original `id` and `text` fields and is intended to show the exact JSONL projection used by the release.
+The ten records in [`docs/data_examples.jsonl`](data_examples.jsonl) preserve the original `id` and `text` fields and show the exact JSONL projection used by the release. The first five lines come from the train smoke sample and the final five lines come from the dev smoke sample. The selection seed, source files, constraints, and record IDs are listed in [`docs/data_examples_meta.json`](data_examples_meta.json).
