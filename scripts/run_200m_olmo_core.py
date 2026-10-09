@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build and run one training step for the SCICOMP26 200M baseline."""
+"""Build and run one training step for the configured SCICOMP26 model."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ def main() -> None:
     parser.add_argument(
         "--config",
         type=Path,
-        default=Path("configs/200m_dense.yaml"),
+        default=Path("training/configs/FLOPs_3e17.yaml"),
         help="Path to the versioned model YAML.",
     )
     parser.add_argument(

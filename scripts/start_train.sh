@@ -5,13 +5,14 @@ set -euo pipefail
 PROJECT_DIR="$(cd -- "$(dirname -- "$0")/.." && pwd -P)"
 COMP_DIR="$(dirname -- "$PROJECT_DIR")"
 IMAGE=scicomp26:cu121-train-v1
+CONFIG_PATH=training/configs/FLOPs_3e17.yaml
 GPUS=0,3
 STEPS=10
 EVAL_EVERY=5
 SAVE_EVERY=5
 SHM_SIZE=64g
 CORPUS_DIR=/home/pretrain10/dolma3_official
-DATA_DIR="$COMP_DIR/data/splits_v2-tok32k-smoke-ctx1024-v1"
+DATA_DIR="$COMP_DIR/data/splits_v2-tok32k-smoke-ctx8192-v1"
 RUN_NAME="ddp-smoke-$(date +%Y%m%d-%H%M%S)-$$"
 RUNS_DIR="$COMP_DIR/runs"
 WANDB_ENABLED=false
@@ -29,6 +30,7 @@ on host GPUs 0,3. Completed token arrays are validated and reused.
 Each training invocation creates a new run directory; it does not resume.
 
   --gpus IDS          Comma-separated host GPU indices (default: 0,3)
+  --config PATH       Model YAML relative to the project (default: training/configs/FLOPs_3e17.yaml)
   --steps N           Optimizer steps (default: 10)
   --eval-every N      Validation interval in steps (default: 5)
   --save-every N      Checkpoint interval in steps (default: 5)
@@ -53,6 +55,7 @@ fail() { printf 'Error: %s\n' "$*" >&2; exit 1; }
 need_value() { [[ $# -ge 2 && -n "$2" && "$2" != --* ]] || fail "$1 needs a value"; }
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --config) need_value "$@"; CONFIG_PATH="$2"; shift 2 ;;
     --gpus) need_value "$@"; GPUS="$2"; shift 2 ;;
     --steps) need_value "$@"; STEPS="$2"; shift 2 ;;
     --eval-every) need_value "$@"; EVAL_EVERY="$2"; shift 2 ;;
@@ -74,6 +77,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ ! -f /.dockerenv ]] || fail "Run this script in a host terminal, outside Docker."
+[[ "$CONFIG_PATH" != /* ]] || fail "--config must be relative to the project directory"
 [[ "$GPUS" =~ ^[0-9]+(,[0-9]+)*$ ]] || fail "--gpus must look like 0,3"
 [[ "$STEPS" =~ ^[1-9][0-9]*$ ]] || fail "--steps must be a positive integer"
 [[ "$EVAL_EVERY" =~ ^[1-9][0-9]*$ ]] || fail "--eval-every must be a positive integer"
@@ -102,6 +106,7 @@ for file in \
   "$CORPUS_DIR/github_staging/scicomp26_data_v0.1/data/splits_v2/sample_train_10000.jsonl.zst" \
   "$CORPUS_DIR/github_staging/scicomp26_data_v0.1/data/splits_v2/sample_dev_1000.jsonl.zst" \
   "$CORPUS_DIR/tokenizer_v1_bpe32k/tokenizer.json" \
+  "$PROJECT_DIR/$CONFIG_PATH" \
   "$PROJECT_DIR/scripts/prepare_smoke_data.py" \
   "$PROJECT_DIR/scripts/train_ddp.py"; do
   [[ -r "$file" ]] || fail "Cannot read: $file"
@@ -164,7 +169,7 @@ TRAIN=(
   --mount "type=bind,src=$DATA_DIR,dst=/data,readonly"
   --mount "type=bind,src=$RUN_DIR,dst=/runs"
   "$IMAGE" torchrun --standalone --nnodes=1 "--nproc-per-node=$NPROC"
-  scripts/train_ddp.py --data-dir /data --output-dir /runs
+  scripts/train_ddp.py --config "$CONFIG_PATH" --data-dir /data --output-dir /runs
   --micro-batch-size 1 --grad-accum-steps 1 --max-steps "$STEPS"
   --eval-every "$EVAL_EVERY" --save-every "$SAVE_EVERY"
   "${WANDB_TRAIN_ARGS[@]}"

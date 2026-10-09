@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Train the baseline with torchrun, using one process per GPU."""
+"""Train the configured model with torchrun, using one process per GPU."""
 
 import argparse
 import json
@@ -39,7 +39,7 @@ def evaluate(model, sampler, batch_size, batches, vocab_size, device, seed):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument('--config', type=Path, default=Path('configs/200m_dense.yaml'))
+    p.add_argument('--config', type=Path, default=Path('training/configs/FLOPs_3e17.yaml'))
     p.add_argument('--data-dir', type=Path, required=True)
     p.add_argument('--output-dir', type=Path, required=True)
     p.add_argument('--max-steps', type=int, default=20)

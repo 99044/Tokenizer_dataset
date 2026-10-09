@@ -21,7 +21,7 @@ def main() -> None:
     parser.add_argument("--vocab-size", type=int, default=50304)
     parser.add_argument("--train-tokens", type=int, default=65536)
     parser.add_argument("--validation-tokens", type=int, default=16384)
-    parser.add_argument("--context-length", type=int, default=1024)
+    parser.add_argument("--context-length", type=int, default=8192)
     parser.add_argument("--period", type=int, default=64)
     args = parser.parse_args()
 

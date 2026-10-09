@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Train the SCICOMP26 baseline on packed token arrays."""
+"""Train the configured SCICOMP26 model on packed token arrays."""
 
 from __future__ import annotations
 
@@ -104,9 +104,9 @@ def load_checkpoint(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", type=Path, default=Path("configs/200m_dense.yaml"))
+    parser.add_argument("--config", type=Path, default=Path("training/configs/FLOPs_3e17.yaml"))
     parser.add_argument("--data-dir", type=Path, required=True)
-    parser.add_argument("--output-dir", type=Path, default=Path("runs/dense_200m_baseline"))
+    parser.add_argument("--output-dir", type=Path, default=Path("runs/olmo_hybrid_1b_3e17"))
     parser.add_argument("--vocab-size", type=int, default=50304)
     parser.add_argument("--max-steps", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=1)

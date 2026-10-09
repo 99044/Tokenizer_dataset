@@ -33,7 +33,7 @@ data/<data_version>/
   "eos_token_id": 0,
   "train_tokens": 0,
   "validation_tokens": 0,
-  "context_length": 1024,
+  "context_length": 8192,
   "created_at": "2026-10-03",
   "notes": "<preprocessing notes>"
 }

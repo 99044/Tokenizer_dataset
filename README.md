@@ -1,7 +1,14 @@
 # SCICOMP26
 
-当前基线是约 200M 参数的 dense decoder-only Transformer，配置见
-[`configs/200m_dense.yaml`](configs/200m_dense.yaml)。
+当前分支是约 1B 参数的 OLMo Hybrid decoder-only Transformer，使用三层
+Gated Delta Net 加一层全局 Attention 的周期结构，并保留每层的 Dense SwiGLU FFN。
+四档 FLOPs 配置位于 [`training/configs`](training/configs/)：
+`FLOPs_3e17.yaml`、`FLOPs_1e18.yaml`、`FLOPs_3e18.yaml` 和 `FLOPs_1e19.yaml`。
+四份配置使用相同的模型结构和 8192 context length，只调整训练 FLOPs 预算、运行名称和输出目录。
+
+模型构建由 [`scripts/model_config.py`](scripts/model_config.py) 统一处理，
+入口脚本通过 `--config` 选择具体预算。模型采用 BF16、AdamW、RMSNorm、RoPE，
+Attention 窗口模式为 `[4096, 4096, 4096, -1]`。
 
 ## Pipeline validation
 
@@ -74,7 +81,8 @@ export WANDB_API_KEY
 bash scripts/start_train.sh \
   --wandb --gpus 0,1,2,3 --steps 1000 \
   --eval-every 50 --save-every 200 \
-  --data-dir /home/zhangrui/comp/data/splits_v2-tok32k-smoke-ctx1024-v1 \
+  --config training/configs/FLOPs_3e17.yaml \
+  --data-dir /home/zhangrui/comp/data/splits_v2-tok32k-smoke-ctx8192-v1 \
   --runs-dir "$PWD/runs" \
   --run-name wb-smoke-4gpu-1000
 ```
