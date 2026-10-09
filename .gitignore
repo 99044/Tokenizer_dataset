@@ -1,1 +1,13 @@
 /runs/
+# Python bytecode and tool caches (at every directory level).
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+/.venv/
+/docker_image.tar
+/models/*/*
+!/models/*/.gitkeep
+/training/logs/*/*
+!/training/logs/*/.gitkeep

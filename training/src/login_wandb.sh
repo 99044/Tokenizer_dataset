@@ -2,7 +2,7 @@
 # Authenticate interactively with the SDK already installed in the training image.
 set -euo pipefail
 
-IMAGE="${1:-scicomp26:cu121-train-v1}"
+IMAGE="${1:-scicomp26:submission-env-v1}"
 docker info >/dev/null 2>&1 || {
   printf 'Cannot access Docker. Refresh your docker group with: newgrp docker\n' >&2
   exit 1

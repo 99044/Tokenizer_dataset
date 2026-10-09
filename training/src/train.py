@@ -12,7 +12,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from comp.scicomp26.scripts.model_config import build_model_config, count_parameters, tie_output_weights
+from model_config import build_model_config, count_parameters, tie_output_weights
 
 
 class PackedTokenSampler:
