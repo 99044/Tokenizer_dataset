@@ -1,6 +1,8 @@
-# Tokenizer 候选版本：训练方法、服务器位置与 24K 对照
+# 历史记录：Tokenizer v1 训练方法、服务器位置与 24K 对照
 
-当前维护两个 tokenizer 候选版本：
+> 本页记录 `tok_bpe32k_v1` 和 `tok_bpe24k_v1` 的历史训练与对照信息。当前仓库发布的 32K 全量候选 `tok_bpe32k_dedup_full_v5` 见 [`tokenizers/tok_bpe32k_dedup_full_v5/`](../tokenizers/tok_bpe32k_dedup_full_v5/)。
+
+该阶段维护过两个 tokenizer 候选版本：
 
 | 版本 | revision | 词表大小 |
 |---|---|---:|
