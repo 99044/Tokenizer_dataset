@@ -1,0 +1,10 @@
+{
+  "status": "passed",
+  "test_documents": 1031,
+  "raw_text_tokens": 2043444,
+  "utf8_bytes": 8126897,
+  "id_mismatches": 0,
+  "roundtrip_failures": 0,
+  "unk_or_reserved_ids": 0,
+  "scope": "synthetic vectors and internal-dev sample; not official A and not full dev"
+}

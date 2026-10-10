@@ -1,0 +1,12 @@
+{
+  "backend": "tokenizers",
+  "bos_token": "<|scicomp26_bos_v1|>",
+  "clean_up_tokenization_spaces": false,
+  "eos_token": "<|scicomp26_eos_v1|>",
+  "model_max_length": 8192,
+  "pad_token": "<|scicomp26_pad_v1|>",
+  "padding_side": "right",
+  "tokenizer_class": "TokenizersBackend",
+  "truncation_side": "right",
+  "unk_token": "<|scicomp26_unk_v1|>"
+}

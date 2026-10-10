@@ -38,3 +38,7 @@ python scripts/train.py \
 ## Data release
 
 真实数据的服务器位置、内容范围、记录格式和示例见 [`docs/DATA_LOCATION.md`](docs/DATA_LOCATION.md)。
+
+## Tokenizer
+
+32K 全量训练候选 `tok_bpe32k_dedup_full_v5` 已随仓库发布，文件和离线加载方式见 [`tokenizers/tok_bpe32k_dedup_full_v5/`](tokenizers/tok_bpe32k_dedup_full_v5/)。它是候选版本；模型 BPB 对照尚未完成。

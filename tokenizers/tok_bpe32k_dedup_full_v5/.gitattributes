@@ -1,0 +1,3 @@
+*.json -text
+SHA256SUMS -text
+README.md text eol=lf
