@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """按 SCICOMP26 PDF 指定的 Megatron-LM 参考口径核算训练 FLOPs。
 
-本脚本只支持比赛当前固定的 8192 序列长度，以及能够映射到参考函数标准
-Transformer 分支的稠密 decoder-only 模型。MoE、混合层、新型算子和动态长度训练
-会直接拒绝，不会退化为 ``6 * 参数量 * token 数`` 等近似公式。
+默认入口仅支持固定 8192 长度的标准稠密 Transformer。
+Hybrid/GDN/信号使用 --auto-hybrid 自动生成完整的版本化逐算子参考计算图，
+或使用 --operator-ledger 提供自定义清单。未核定算子不会退化为 6P 或统一乘 3。
 
 必须注意：比赛指定的 ``num_floating_point_operations`` 不接收滑动窗口参数；
 其标准 Transformer 分支对所有注意力层统一使用 ``batch_size * seq_length²``。
@@ -658,7 +658,11 @@ def calculate(args: argparse.Namespace) -> dict[str, Any]:
 def build_parser() -> argparse.ArgumentParser:
     """声明严格核算所需的全部输入；不提供会静默猜测架构的默认值。"""
 
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        epilog="Hybrid graph modes: --auto-hybrid --scalar-op-cost COST, --write-ledger-template PATH or --operator-ledger PATH; "
+               "add --help with either mode to see its arguments.",
+    )
     parser.add_argument("--plan-only", action="store_true", help="plan a budget before training; no run-plan or metrics required")
     parser.add_argument("--model-config", type=Path, required=True)
     parser.add_argument("--run-plan", type=Path)
@@ -698,6 +702,12 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     """运行核算、原子化保存 JSON，并打印便于人工复核的摘要。"""
 
+    if any(argument.split("=", 1)[0] in {"--auto-hybrid", "--operator-ledger", "--write-ledger-template"}
+           for argument in sys.argv[1:]):
+        from src.graph_accounting import main as graph_accounting_main
+
+        graph_accounting_main()
+        return
     if any(argument.split("=", 1)[0] == "--flops-per-token" for argument in sys.argv[1:]):
         from src.token_flops import main as token_flops_main
 

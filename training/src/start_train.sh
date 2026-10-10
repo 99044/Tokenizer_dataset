@@ -4,19 +4,19 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd -- "$(dirname -- "$0")/../.." && pwd -P)"
 COMP_DIR="$(dirname -- "$PROJECT_DIR")"
-IMAGE=scicomp26:submission-env-v1
+IMAGE=scicomp26:submission-env-hybrid-v3
 CONFIG=training/configs/FLOPs_3e17.yaml
 STAGE=stage1
 GPUS=0,3
-STEPS=10
-MICRO_BATCH_SIZE=1
+STEPS=""
+MICRO_BATCH_SIZE=""
 GRAD_ACCUM_STEPS=""
 LEARNING_RATE=""
 WARMUP_STEPS=""
 STOP_AFTER=""
 RESUME=""
-EVAL_EVERY=5
-SAVE_EVERY=5
+EVAL_EVERY=""
+SAVE_EVERY=""
 SHM_SIZE=64g
 DATA_DIR=""
 DATA_FORMAT=auto
@@ -42,16 +42,16 @@ Training steps are explicit: dense OLMo3 FLOPs planning does not apply to GDN.
   --config PATH       Model YAML inside this repository (default: training/configs/FLOPs_3e17.yaml)
   --stage stage1      Random-initialization training, or restart with --resume
   --gpus IDS          Comma-separated host GPU indices (default: 0,3)
-  --steps N           Optimizer steps (default: 10; no automatic FLOPs certification)
-  --micro-batch-size N Per-GPU sequences (default: 1)
-  --grad-accum-steps N  Accumulation steps (original runner default: 1)
-  --learning-rate LR   AdamW learning rate (original runner default: 2e-4)
-  --warmup-steps N     Warmup updates (original runner default: 0)
+  --steps N           Override training.max_steps (null/missing fallback: 20; no automatic FLOPs certification)
+  --micro-batch-size N Override training.micro_batch_size (null/missing fallback: 1)
+  --grad-accum-steps N  Override training.gradient_accumulation_steps (null/missing fallback: 1)
+  --learning-rate LR   Override optimizer.learning_rate (null/missing fallback: 2e-4)
+  --warmup-steps N     Override scheduler.warmup_steps (null/missing fallback: 0)
   --stop-after N       Stop at this cumulative step, preserving the LR schedule
   --resume PATH        Restart the same training plan from a native checkpoint
-  --eval-every N       Validation interval (default: 5)
-  --save-every N       Checkpoint interval (default: 5)
-  --image NAME         Docker image (default: scicomp26:submission-env-v1)
+  --eval-every N       Override logging.eval_every_steps (null/missing fallback: 10)
+  --save-every N       Override logging.checkpoint_every_steps (null/missing fallback: 10)
+  --image NAME         Docker image (default: scicomp26:submission-env-hybrid-v3)
   --data-dir PATH      Packed dataset, or a directory of raw *.jsonl shards
   --data-format NAME   auto (default), packed, or jsonl
   --tokenizer-dir PATH Existing tokenizer; required for raw JSONL
@@ -120,8 +120,8 @@ for value in "$STEPS" "$MICRO_BATCH_SIZE" "$GRAD_ACCUM_STEPS" "$STOP_AFTER" "$EN
   [[ -z "$value" || "$value" =~ ^[1-9][0-9]*$ ]] || fail "Steps, tokens and batch sizes must be positive integers"
 done
 [[ -z "$WARMUP_STEPS" || "$WARMUP_STEPS" =~ ^[0-9]+$ ]] || fail "--warmup-steps must be a nonnegative integer"
-[[ "$EVAL_EVERY" =~ ^[1-9][0-9]*$ ]] || fail "--eval-every must be a positive integer"
-[[ "$SAVE_EVERY" =~ ^[1-9][0-9]*$ ]] || fail "--save-every must be a positive integer"
+[[ -z "$EVAL_EVERY" || "$EVAL_EVERY" =~ ^[1-9][0-9]*$ ]] || fail "--eval-every must be a positive integer"
+[[ -z "$SAVE_EVERY" || "$SAVE_EVERY" =~ ^[1-9][0-9]*$ ]] || fail "--save-every must be a positive integer"
 [[ "$VALIDATION_PERMYRIAD" =~ ^[1-9][0-9]{0,3}$ ]] || fail "--validation-permyriad must be in 1..9999"
 [[ "$RUN_NAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]] || fail "Invalid --run-name"
 IFS=, read -r -a GPU_LIST <<< "$GPUS"
@@ -132,7 +132,7 @@ for gpu in "${GPU_LIST[@]}"; do
   SEEN_GPUS[$gpu]=1
 done
 
-for cmd in docker realpath tee; do
+for cmd in docker realpath tee sha256sum; do
   command -v "$cmd" >/dev/null || fail "Required command not found: $cmd"
 done
 [[ "$CONFIG" == /* ]] || CONFIG="$PROJECT_DIR/$CONFIG"
@@ -188,6 +188,7 @@ COMMON=(
   --user "$(id -u):$(id -g)"
   --env HOME=/tmp
   --env PYTHONDONTWRITEBYTECODE=1
+  --env PYTORCH_KERNEL_CACHE_PATH=/tmp/pytorch-kernel-cache
   --env OMP_NUM_THREADS=1
   --workdir /workspace/comp/scicomp26
   --mount "type=bind,src=$PROJECT_DIR,dst=/workspace/comp/scicomp26,readonly"
@@ -247,6 +248,8 @@ if [[ "$DATA_FORMAT" == jsonl ]]; then
     done
   fi
 fi
+VALIDATION_KEY="$(printf '%s' "$DATA_DIR" | sha256sum)"
+VALIDATION_DIR="$COMP_DIR/data/token-cache-validation/${VALIDATION_KEY%% *}"
 DATA_REFERENCE_MOUNTS=()
 for token_file in train.npy validation.npy; do
   if [[ -L "$DATA_DIR/$token_file" ]]; then
@@ -254,20 +257,32 @@ for token_file in train.npy validation.npy; do
     DATA_REFERENCE_MOUNTS+=(--mount "type=bind,src=$resolved_token_file,dst=$resolved_token_file,readonly")
   fi
 done
+VALIDATE=(
+  docker run "${COMMON[@]}" --network none
+  --env TOKEN_CACHE_VALIDATION_DIR=/validation
+  --mount "type=bind,src=$DATA_DIR,dst=/data,readonly"
+  "${DATA_REFERENCE_MOUNTS[@]}"
+  --mount "type=bind,src=$VALIDATION_DIR,dst=/validation"
+  "$IMAGE" python training/src/token_cache_validation.py
+  --data-dir /data --model-config "$CONFIG_CONTAINER"
+)
 TRAIN=(
   docker run "${COMMON[@]}" "${GPU_ARGS[@]}" "${WANDB_DOCKER_ARGS[@]}"
   "${CHECKPOINT_DOCKER_ARGS[@]}"
+  --env TOKEN_CACHE_VALIDATION_DIR=/validation
+  --mount "type=bind,src=$VALIDATION_DIR,dst=/validation,readonly"
   --mount "type=bind,src=$DATA_DIR,dst=/data,readonly"
   "${DATA_REFERENCE_MOUNTS[@]}"
   --mount "type=bind,src=$RUN_DIR,dst=/runs"
   "$IMAGE" torchrun --standalone --nnodes=1 "--nproc-per-node=$NPROC"
   training/src/train_ddp.py --config "$CONFIG_CONTAINER" --data-dir /data --output-dir /runs
-  --micro-batch-size "$MICRO_BATCH_SIZE"
-  --eval-every "$EVAL_EVERY" --save-every "$SAVE_EVERY"
   "${WANDB_TRAIN_ARGS[@]}"
   "${CHECKPOINT_TRAIN_ARGS[@]}"
 )
 [[ -z "$STEPS" ]] || TRAIN+=(--max-steps "$STEPS")
+[[ -z "$MICRO_BATCH_SIZE" ]] || TRAIN+=(--micro-batch-size "$MICRO_BATCH_SIZE")
+[[ -z "$EVAL_EVERY" ]] || TRAIN+=(--eval-every "$EVAL_EVERY")
+[[ -z "$SAVE_EVERY" ]] || TRAIN+=(--save-every "$SAVE_EVERY")
 [[ -z "$GRAD_ACCUM_STEPS" ]] || TRAIN+=(--grad-accum-steps "$GRAD_ACCUM_STEPS")
 [[ -z "$LEARNING_RATE" ]] || TRAIN+=(--learning-rate "$LEARNING_RATE")
 [[ -z "$WARMUP_STEPS" ]] || TRAIN+=(--warmup-steps "$WARMUP_STEPS")
@@ -281,10 +296,15 @@ if [[ "$DRY_RUN" == true ]]; then
     printf 'Preprocessing command (cache-key is resolved before training):\n'
     print_command "${PREPARE[@]}"
   fi
+  printf 'Data validation command (before GPU launch):\n'
+  print_command "${VALIDATE[@]}"
   print_command "${TRAIN[@]}"
   exit 0
 fi
 
+mkdir -p -- "$VALIDATION_DIR"
+printf 'Checking token cache validation records\n'
+"${VALIDATE[@]}"
 printf '\nCheck GPUs, then start %s-process DDP (%s plan)\n' "$NPROC" "$STAGE"
 docker run "${COMMON[@]}" "${GPU_ARGS[@]}" "$IMAGE" python -c \
   'import sys, torch; n=int(sys.argv[1]); assert torch.cuda.is_available(), "CUDA unavailable"; assert torch.cuda.device_count()==n, "GPU count mismatch"; print("GPUs:", [torch.cuda.get_device_name(i) for i in range(n)])' \

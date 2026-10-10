@@ -6,44 +6,13 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 
 from model_config import build_model_config, count_parameters, tie_output_weights
-
-
-class PackedTokenSampler:
-    def __init__(self, path: Path, sequence_length: int, vocab_size: int, seed: int) -> None:
-        self.tokens = np.load(path, mmap_mode="r")
-        if self.tokens.ndim != 1:
-            raise ValueError(f"{path} must contain a one-dimensional token array")
-        if not np.issubdtype(self.tokens.dtype, np.integer):
-            raise ValueError(f"{path} must contain integer token IDs")
-        if self.tokens.size and int(self.tokens.max()) >= vocab_size:
-            raise ValueError(f"{path} contains a token ID outside vocab_size={vocab_size}")
-        self.sequence_length = sequence_length
-        self.rng = np.random.default_rng(seed)
-        self.max_start = len(self.tokens) - sequence_length - 1
-        if self.max_start < 0:
-            raise ValueError(f"{path} is shorter than sequence_length + 1")
-
-    def batch(
-        self, batch_size: int, device: torch.device, starts: Optional[np.ndarray] = None
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        if starts is None:
-            starts = self.rng.integers(0, self.max_start + 1, size=batch_size)
-        inputs = np.empty((len(starts), self.sequence_length), dtype=np.int64)
-        labels = np.empty_like(inputs)
-        for row, start in enumerate(starts):
-            inputs[row] = self.tokens[start : start + self.sequence_length]
-            labels[row] = self.tokens[start + 1 : start + self.sequence_length + 1]
-        return (
-            torch.from_numpy(inputs).to(device=device),
-            torch.from_numpy(labels).to(device=device),
-        )
+from packed_token_sampler import PackedTokenSampler
 
 
 def evaluate(
@@ -150,10 +119,10 @@ def main() -> None:
         print(f"resumed_step={start_step}")
 
     train_sampler = PackedTokenSampler(
-        args.data_dir / "train.npy", context_length, args.vocab_size, 42
+        args.data_dir / "train.npy", context_length, args.vocab_size, 42, metadata
     )
     validation_sampler = PackedTokenSampler(
-        args.data_dir / "validation.npy", context_length, args.vocab_size, 43
+        args.data_dir / "validation.npy", context_length, args.vocab_size, 43, metadata
     )
     args.output_dir.mkdir(parents=True, exist_ok=True)
 

@@ -1,3 +1,14 @@
+ARG HYBRID_KERNEL_BASE_IMAGE=scicomp26:submission-env-hybrid-v2
+
+# Preserve the installed Hybrid dependency closure and repair the pinned
+# FLA backward kernel's Triton 3.2 encoding mismatch.
+FROM ${HYBRID_KERNEL_BASE_IMAGE} AS hybrid_kernel_compat
+ENV PYTORCH_KERNEL_CACHE_PATH=/tmp/pytorch-kernel-cache
+COPY training/src/patch_fla_torch26.py /opt/scicomp26-manifest/patch_fla_torch26.py
+RUN python /opt/scicomp26-manifest/patch_fla_torch26.py \
+    && python -m pip check \
+    && install -d -m 1777 /tmp/pytorch-kernel-cache
+
 FROM pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime@sha256:77f17f843507062875ce8be2a6f76aa6aa3df7f9ef1e31d9d7432f4b0f563dee AS runtime
 
 ENV PYTHONUNBUFFERED=1 \

@@ -46,7 +46,7 @@ training:
   dtype: bfloat16
   max_steps: null
   micro_batch_size: 1
-  gradient_accumulation_steps: 1
+  gradient_accumulation_steps: 32
   gradient_checkpointing: false
 
 optimizer:

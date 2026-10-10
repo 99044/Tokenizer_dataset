@@ -17,6 +17,8 @@ import numpy as np
 from tokenizers import Tokenizer
 
 from training_data import MASK_RULE, PACKED_FORMAT, normalize_data_metadata
+from token_cache_validation import (TOKENIZATION_RECIPE_SHA256, atomic_record,
+                                    ensure_cache, record_for_array)
 
 
 def sha256_file(path: Path) -> str:
@@ -59,25 +61,37 @@ def load_tokenizer(directory: Path) -> tuple:
     return tokenizer, info
 
 
-def write_npy(raw: Path, output: Path, dtype: str, count: int) -> str:
-    """Copy the disk stream into NPY while hashing, without loading it into RAM."""
-    digest = hashlib.sha256()
+def write_npy(raw: Path, output: Path, dtype: str, count: int) -> dict:
+    """Validate every value while copying, without another disk scan."""
+    minimum = maximum = None
+    ones = 0
+    copied = 0
     with output.open('wb') as stream:
         np.lib.format.write_array_header_1_0(stream, {
             'descr': np.lib.format.dtype_to_descr(np.dtype(dtype)),
             'fortran_order': False, 'shape': (count,),
         })
-    with output.open('rb') as stream:
-        digest.update(stream.read())  # Only the NPY header exists at this point.
     with output.open('ab') as stream, raw.open('rb') as source:
         for block in iter(lambda: source.read(8 * 1024 * 1024), b''):
+            values = np.frombuffer(block, dtype=dtype)
+            if values.size:
+                low, high = int(values.min()), int(values.max())
+                minimum = low if minimum is None else min(minimum, low)
+                maximum = high if maximum is None else max(maximum, high)
+                if dtype == 'u1':
+                    ones += int(np.count_nonzero(values == 1))
             stream.write(block)
-            digest.update(block)
+            copied += len(block)
+    if copied != count * np.dtype(dtype).itemsize:
+        raise ValueError(f'Raw cache length does not match token count: {raw}')
     raw.unlink()
-    return digest.hexdigest()
+    result = dict(min=minimum, max=maximum, method='validated_during_npy_write')
+    if dtype == 'u1':
+        result['ones'] = ones
+    return result
 
 
-def validate_cache(directory: Path, request: dict, verify_hashes: bool = False) -> dict:
+def validate_cache(directory: Path, request: dict) -> dict:
     metadata = json.loads((directory / 'metadata.json').read_text(encoding='utf-8'))
     if metadata.get('preprocessing') != request:
         raise ValueError(f'Cache provenance mismatch: {directory}')
@@ -87,19 +101,11 @@ def validate_cache(directory: Path, request: dict, verify_hashes: bool = False) 
         for filename, dtype in [(f'{split}.npy', np.dtype('<u4')),
                                 (f'{split}_is_text.npy', np.dtype('u1'))]:
             path = directory / filename
-            if file_stat(path) != metadata['cache_files'][filename]:
-                raise ValueError(f'Cache file changed or is incomplete: {path}')
             array = np.load(path, mmap_mode='r', allow_pickle=False)
             if array.shape != (count,) or array.dtype != dtype:
                 raise ValueError(f'Invalid cache array: {path}')
             del array
-            if verify_hashes and sha256_file(path) != metadata['splits'][split]['npy_sha256'][filename]:
-                raise ValueError(f'Cache hash mismatch: {path}')
-    if verify_hashes:
-        for source in metadata['source']['files']:
-            path = Path(request['source_root']) / source['name']
-            if sha256_file(path) != source['sha256']:
-                raise ValueError(f'Source hash mismatch: {path}')
+    ensure_cache(directory, metadata, metadata['tokenizer']['vocab_size'])
     return metadata
 
 
@@ -151,12 +157,10 @@ def build_cache(source_root: Path, files: list, tokenizer: Tokenizer, tokenizer_
                               (directory / f'{split}.mask.raw').open('wb'))
         log('Starting raw JSONL tokenization; no text normalization, truncation or padding')
         for path in files:
-            digest = hashlib.sha256()
             batch = []
             batch_characters = 0
             with path.open('rb') as stream:
                 for number, line in enumerate(stream, 1):
-                    digest.update(line)
                     if not line.strip():
                         continue
                     try:
@@ -181,22 +185,23 @@ def build_cache(source_root: Path, files: list, tokenizer: Tokenizer, tokenizer_
                         next_report += 100000
             if batch:
                 emit(batch)
-            source_records.append(dict(name=path.name, sha256=digest.hexdigest()))
+            source_records.append(dict(name=path.name, **file_stat(path)))
             log(f'Finished {path.name}; documents={documents:,}')
     finally:
         for pair in handles.values():
             for stream in pair:
                 stream.close()
 
+    validation_values = {}
     for split in stats:
         count = stats[split]['stream_tokens']
         if count < request['context_length'] + 1 or not stats[split]['scored_text_tokens']:
             raise ValueError(f'{split} has insufficient text tokens for context_length+1; '
                              'provide more documents or change validation-permyriad')
-        stats[split]['npy_sha256'] = {
+        validation_values.update({
             f'{split}.npy': write_npy(directory / f'{split}.tokens.raw', directory / f'{split}.npy', '<u4', count),
             f'{split}_is_text.npy': write_npy(directory / f'{split}.mask.raw', directory / f'{split}_is_text.npy', 'u1', count),
-        }
+        })
     if [dict(name=path.name, **file_stat(path)) for path in sorted(source_root.glob('*.jsonl'))] != request['source_files']:
         raise ValueError('Source files changed during preprocessing')
     if any(sha256_file(Path(request['tokenizer_root']) / name) != digest
@@ -223,7 +228,7 @@ def build_cache(source_root: Path, files: list, tokenizer: Tokenizer, tokenizer_
         'splits': stats, 'cache_files': {name: file_stat(directory / name) for name in filenames},
         'reproducibility': {'file_order': 'lexical filename order, original line order within each split',
                             'generation_script': 'prepare_token_cache.py', 'external_data': False,
-                            'cache_reuse_checks': 'request fingerprint, array headers, sizes and modification times'},
+                            'cache_reuse_checks': 'validation records, metadata digest, array headers, size, mtime_ns and ctime_ns'},
     }
     metadata.update(vocab_size=tokenizer_info['vocab_size'],
                     context_length=request['context_length'],
@@ -231,14 +236,16 @@ def build_cache(source_root: Path, files: list, tokenizer: Tokenizer, tokenizer_
                     train_tokens=stats['train']['stream_tokens'],
                     validation_tokens=stats['validation']['stream_tokens'])
     (directory / 'metadata.json').write_text(json.dumps(metadata, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
+    for name, values in validation_values.items():
+        record = record_for_array(directory / name, metadata, tokenizer_info['vocab_size'], values)
+        atomic_record(directory / '.validation' / (name + '.json'), record)
     validate_cache(directory, request)
     log(f'Complete; train tokens={stats["train"]["stream_tokens"]:,}; validation tokens={stats["validation"]["stream_tokens"]:,}')
 
 
 def prepare_cache(source_root: Path, tokenizer_dir: Path, output: Path, context_length: int = 8192,
                   validation_permyriad: int = 100, batch_size: int = 128,
-                  source_label: str | None = None, tokenizer_label: str | None = None,
-                  verify_hashes: bool = False) -> Path:
+                  source_label: str | None = None, tokenizer_label: str | None = None) -> Path:
     if context_length <= 0 or batch_size <= 0 or not 0 < validation_permyriad < 10000:
         raise ValueError('context-length and encode-batch-size must be positive; validation-permyriad must be in 1..9999')
     source_root, tokenizer_dir = source_root.resolve(), tokenizer_dir.resolve()
@@ -256,7 +263,7 @@ def prepare_cache(source_root: Path, tokenizer_dir: Path, output: Path, context_
                'tokenizer_root': str(tokenizer_dir),
                'tokenizer_label': tokenizer_label or str(tokenizer_dir), 'tokenizer_files': tokenizer_files,
                'context_length': context_length, 'validation_permyriad': validation_permyriad,
-               'script_sha256': sha256_file(Path(__file__)), 'label_mask_rule': MASK_RULE}
+               'script_sha256': TOKENIZATION_RECIPE_SHA256, 'label_mask_rule': MASK_RULE}
     key = hashlib.sha256(json.dumps(request, sort_keys=True).encode()).hexdigest()
     output.mkdir(parents=True, exist_ok=True)
     directory = output / key
@@ -264,7 +271,7 @@ def prepare_cache(source_root: Path, tokenizer_dir: Path, output: Path, context_
     with (output / f'.{key}.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         if directory.exists():
-            validate_cache(directory, request, verify_hashes)
+            validate_cache(directory, request)
             print(f'Reusing token cache: {directory}', file=sys.stderr, flush=True)
             return directory
         building = output / f'.building-{key}'
@@ -291,7 +298,6 @@ def main():
     parser.add_argument('--encode-batch-size', type=int, default=128)
     parser.add_argument('--source-label', help='Original host source path for provenance and cache identity')
     parser.add_argument('--tokenizer-label', help='Original host tokenizer path')
-    parser.add_argument('--verify-cache', action='store_true', help='Also rehash cached arrays and source files on reuse')
     args = parser.parse_args()
     context = args.context_length
     if args.model_config:
@@ -303,7 +309,7 @@ def main():
     directory = prepare_cache(args.source_root, args.tokenizer, args.output,
                               context if context is not None else 8192,
                               args.validation_permyriad, args.encode_batch_size,
-                              args.source_label, args.tokenizer_label, args.verify_cache)
+                              args.source_label, args.tokenizer_label)
     print(directory.name)
 
 

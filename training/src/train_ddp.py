@@ -18,7 +18,8 @@ import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from model_config import build_model_config, count_parameters, tie_output_weights
-from train import PackedTokenSampler
+from packed_token_sampler import PackedTokenSampler
+from training_options import resolve_training_options
 
 
 @torch.no_grad()
@@ -42,21 +43,21 @@ def main():
     p.add_argument('--config', type=Path, default=Path('training/configs/FLOPs_3e17.yaml'))
     p.add_argument('--data-dir', type=Path, required=True)
     p.add_argument('--output-dir', type=Path, required=True)
-    p.add_argument('--max-steps', type=int, default=20)
+    p.add_argument('--max-steps', type=int)
     p.add_argument('--stop-after', type=int, help='在此累计 step 停止，但不改变原学习率计划')
-    p.add_argument('--micro-batch-size', type=int, default=1)
-    p.add_argument('--grad-accum-steps', type=int, default=1)
-    p.add_argument('--learning-rate', type=float, default=2e-4)
-    p.add_argument('--warmup-steps', type=int, default=0)
-    p.add_argument('--eval-every', type=int, default=10)
+    p.add_argument('--micro-batch-size', type=int)
+    p.add_argument('--grad-accum-steps', type=int)
+    p.add_argument('--learning-rate', type=float)
+    p.add_argument('--warmup-steps', type=int)
+    p.add_argument('--eval-every', type=int)
     p.add_argument('--eval-batches', type=int, default=2)
-    p.add_argument('--save-every', type=int, default=10)
+    p.add_argument('--save-every', type=int)
     p.add_argument('--resume', type=Path)
     p.add_argument('--wandb', action='store_true', help='Upload metrics to W&B from rank 0')
     p.add_argument('--wandb-entity', help='Override the configured W&B entity')
     p.add_argument('--wandb-project', help='Override the configured W&B project')
     p.add_argument('--wandb-name', help='W&B run name (default: output directory name)')
-    args = p.parse_args()
+    args = resolve_training_options(p.parse_args())
     for name in ['max_steps', 'micro_batch_size', 'grad_accum_steps', 'eval_every', 'eval_batches', 'save_every']:
         if getattr(args, name) <= 0:
             raise ValueError(f'{name} 必须为正数')
@@ -88,7 +89,8 @@ def main():
         seed = settings['run']['seed']
         torch.manual_seed(seed)
         config.init_seed = seed
-        model = config.build(init_device='cpu', device=device, max_seq_len=context_length)
+        model = config.build(init_device='cpu')
+        model.init_weights(max_seq_len=context_length, device=device)
         tie_output_weights(model)
         optimizer = torch.optim.AdamW(
             model.parameters(), lr=args.learning_rate,
@@ -127,13 +129,24 @@ def main():
         if resumed_rng:
             torch.set_rng_state(resumed_rng['cpu'])
             torch.cuda.set_rng_state(resumed_rng['cuda'], device=device)
-        train = PackedTokenSampler(args.data_dir / 'train.npy', context_length, vocab_size, seed + rank)
-        validation = PackedTokenSampler(args.data_dir / 'validation.npy', context_length, vocab_size, seed + rank)
+        train = PackedTokenSampler(args.data_dir / 'train.npy', context_length, vocab_size, seed + rank, metadata)
+        validation = PackedTokenSampler(args.data_dir / 'validation.npy', context_length, vocab_size, seed + rank, metadata)
         global_batch = world * args.micro_batch_size * args.grad_accum_steps
         tokens_per_step = global_batch * context_length
         if rank == 0:
             args.output_dir.mkdir(parents=True, exist_ok=True)
             (args.output_dir / 'run-plan.json').write_text(json.dumps(plan, indent=2, ensure_ascii=False))
+            print(f'resolved training options: micro_batch_size={args.micro_batch_size} '
+                  f'grad_accum_steps={args.grad_accum_steps} learning_rate={args.learning_rate} '
+                  f'warmup_steps={args.warmup_steps} max_steps={args.max_steps} '
+                  f'eval_every={args.eval_every} save_every={args.save_every}', flush=True)
+            if settings['model']['type'] == 'olmo_hybrid_1b':
+                from hybrid_flops import runtime_graph_metadata
+
+                runtime_metadata = runtime_graph_metadata(model)
+                runtime_metadata.update(first_optimizer_step=start_step + 1, planned_stop_step=stop_step)
+                runtime_path = args.output_dir / f'runtime_graph-start-{start_step + 1}.json'
+                runtime_path.write_text(json.dumps(runtime_metadata, indent=2, ensure_ascii=False) + '\n')
             print(f'params={count_parameters(model):,} world_size={world} global_batch={global_batch} tokens_per_step={global_batch * context_length}', flush=True)
         if args.wandb:
             # Propagate initialization failures so other ranks do not wait in training collectives.

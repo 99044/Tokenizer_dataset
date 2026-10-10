@@ -33,7 +33,17 @@ docker build -f training/src/Dockerfile -t scicomp26:submission-env-v1 .
 
 镜像只包含运行环境及 OLMo-core 兼容补丁；源码、权重、数据和日志通过挂载提供。
 现有基础镜像没有安装 `flash_attn` / `fla`；原模型仍指定 `flash_2` 并使用 GDN。
-Hybrid 所需算子及其固定版本尚须另行配置验证，本次不替换 attention 或 GDN 实现。
+当前训练使用已安装 FlashAttention/FLA 和编译工具的 `scicomp26:submission-env-hybrid-v3`。
+从现有 Hybrid v2 环境生成 v3（保留依赖版本，修复 Triton 3.2 首次反向编译错误）：
+
+```bash
+docker build --target hybrid_kernel_compat -f training/src/Dockerfile \
+  -t scicomp26:submission-env-hybrid-v3 .
+```
+
+该构建目标需要已有 `scicomp26:submission-env-hybrid-v2`；可用
+`--build-arg HYBRID_KERNEL_BASE_IMAGE=<兼容的 Hybrid 镜像>` 指定基础环境。
+补丁只调整乘法与转置顺序，保持模型和算术结果。
 已有 `docker_image.tar` 保留，不因目录整理自动重建或纳入 Git。
 
 ## 2. 数据与 tokenizer
@@ -41,14 +51,18 @@ Hybrid 所需算子及其固定版本尚须另行配置验证，本次不替换 
 原始官方 JSONL 为 `/home/pretrain10/dolma3_official/extracted/*.jsonl`，
 现有 tokenizer 为 `/home/pretrain10/dolma3_official/tokenizer_v1_bpe32k/`。
 复用 `tok_bpe32k_v1` 的 32768 词表，不重新训练 tokenizer。
-四档数据路径可用命令行覆盖；完整数据处理来源及文件 SHA-256 保存在缓存 `metadata.json`。
+四档数据路径可用命令行覆盖；数据处理来源和文件属性保存在缓存 `metadata.json`；tokenizer 小文件保留 SHA-256。
 
 `training/src/prepare_token_cache.py` 按分片名字典序、文件内原行序读取，不清洗或截断正文；
 按 `SHA-256(str(id))` 前 64 位大端整数 `%10000<100` 划分 1% 内部验证集，缺少 id 时使用 text。
 每篇文档前置 EOS，正文完整分词后拼接为连续 uint32 数组，无 padding。
 插入 EOS 的 `is_text` 为 0，正文 token 为 1；同时记录原 text 的 UTF-8 字节数。
-缓存指纹包含来源文件属性、tokenizer 哈希、脚本哈希、序列长度和划分比例，
-首次完整生成并验证后发布，后续启动复用；默认根目录 `../data/extracted-token-cache/`。
+缓存指纹包含来源文件属性、tokenizer 哈希、固定的分词配方标识、序列长度和划分比例，
+首次生成时完成 token 范围、数组类型/长度和掩码值/计数的全量校验，写入 `.validation/`。
+后续启动核对元数据、数组头以及 size/mtime/ctime；匹配则复用，变化才重新扫描。
+数据只读时，启动器在 GPU 启动前完成 CPU 校验，将记录持久化到
+`../data/token-cache-validation/`；不对大型数据文件计算 SHA-256。
+默认缓存根目录 `../data/extracted-token-cache/`。
 
 ```bash
 mkdir -p /home/zhangrui/comp/data/extracted-token-cache
@@ -73,7 +87,7 @@ docker run --rm --pull=never --network none \
 
 原训练器未读取 `is_text` 掩码，也未传递 `cu_doc_lens` 文档边界；本次保留原采样和 loss 行为。
 GDN 文档边界重置仍需后续数据接口适配。
-因此目录与数据入口对齐不代表 Hybrid 全流程训练已经验证。
+已验证两卡训练前向、反向和参数更新；完整预算训练仍在进行。
 
 ## 3. 四档配置与训练
 
@@ -84,16 +98,41 @@ GDN 文档边界重置仍需后续数据接口适配。
 | --- | --- |
 | 随机种子 | 42 |
 | 优化器 | AdamW，betas=(0.9, 0.95)，eps=1e-8，weight decay=0.1，gradient clip=1.0 |
-| 学习率与调度 | CLI 默认 2e-4；warmup 默认 0，后续 cosine；用 --learning-rate / --warmup-steps 覆盖 |
+| 学习率与调度 | 显式 CLI 优先，否则读取 YAML 的 optimizer.learning_rate / scheduler.warmup_steps；null 或缺失时回退 2e-4 / 0；后续 cosine |
 | 序列长度 / 精度 | 8192 / bfloat16 |
-| 硬件与并行 | 两张 A100，GPU 1、2，torchrun DDP，一卡一个进程 |
-| batch | 每卡 1 条序列，累积 128 次；全局 256 条，即 2,097,152 输入 tokens/update |
+| 硬件与并行 | 两张 A100，GPU 0、1，torchrun DDP，一卡一个进程 |
+| batch | 1e19 YAML 每卡 1 条序列，累积 32 次；两卡全局 64 条，即 524,288 输入 tokens/update |
 | 初始化与恢复 | 新运行从随机初始化；--resume 恢复 model/optimizer/scheduler/每 rank RNG，计划必须一致 |
 
+训练参数优先级为显式命令行值、对应 YAML 值、内置回退值。`--micro-batch-size` /
+`--grad-accum-steps` 未传时读取 `training.micro_batch_size` /
+`training.gradient_accumulation_steps`，不再被启动器的 batch=1 覆盖。
+总步数和验证/保存间隔也读取 YAML；max_steps 为 null 时回退 20，验证/保存间隔缺失时回退 10。
+启动日志打印实际生效的参数，run-plan.json 保存实际 batch 和学习率。
+
 先设置四档 `STEPS_3E17`、`STEPS_1E18`、`STEPS_3E18`、`STEPS_1E19` 为各自已核定的正整数步数。
-GDN FLOPs 公式尚未接入，不能将稠密 OLMo3 的 563/676 步作为 Hybrid 预算依据。
+Hybrid 的版本化逐算子参考图已接入 `training/count_flops.py --auto-hybrid`，
+不能将稠密 OLMo3 的 563/676 步作为 Hybrid 预算依据。
+用 32768 词表、8192 上下文、两张卡、每卡 batch=1、累积 32 次，
+并将 exp/sqrt/div/log 的逻辑开销显式设为 1 时，1e19 预算对应 3068 个更新，
+计划 FLOPs 为 9.998993460604875e18、输入 tokens 为 1,608,515,584。
+这是本地参考口径的计划；特殊函数开销不是主办方已明确给出的规定，最终按实际日志核算。
+在宿主机运行以下命令可重新生成计划（更改 GPU 数量或 batch 后须重算）：
+
+```bash
+docker run --rm --network none --user "$(id -u):$(id -g)" \
+  --env HOME=/tmp --env PYTHONDONTWRITEBYTECODE=1 \
+  --mount "type=bind,src=$PWD,dst=/repo" --workdir /repo \
+  scicomp26:submission-env-hybrid-v3 python training/count_flops.py \
+  --auto-hybrid --scalar-op-cost 1 --plan-only --target-flops 1e19 \
+  --model-config training/configs/FLOPs_1e19.yaml --padded-vocab-size 32768 \
+  --micro-batch-size 1 --data-parallel-size 2 --grad-accum-steps 32 \
+  --write-operator-ledger training/logs/FLOPs_1e19/hybrid_operator_ledger.json \
+  --output training/logs/FLOPs_1e19/hybrid_flops_plan.json
+```
+
 当前启动器只传递手动 `--steps`，不接受 `--target-flops` 自动预算。
-W&B 登录入口为 `bash training/src/login_wandb.sh scicomp26:submission-env-v1`。
+W&B 登录入口为 `bash training/src/login_wandb.sh scicomp26:submission-env-hybrid-v3`。
 
 ```bash
 bash training/train.sh \
@@ -139,15 +178,13 @@ bash training/train.sh \
 
 ```bash
 bash training/train.sh \
-  --image scicomp26:submission-env-v1 \
+  --image scicomp26:submission-env-hybrid-v3 \
   --config training/configs/FLOPs_1e19.yaml \
-  --stage stage1 --gpus 1,2 \
-  --data-dir /home/pretrain10/dolma3_official/extracted \
-  --data-format jsonl \
-  --tokenizer-dir /home/pretrain10/dolma3_official/tokenizer_v1_bpe32k \
-  --micro-batch-size 1 --grad-accum-steps 128 \
-  --steps "$STEPS_1E19" --save-every 10 --eval-every 10 \
-  --run-name olmo_hybrid_1b-1e19 \
+  --stage stage1 --gpus 0,1 \
+  --data-dir ../data/extracted-token-cache/5b61d12201f32c1cdbeb083c69947f7b4149bd4a000f5bd77257f968cbd9164e \
+  --data-format packed \
+  --steps 3068 \
+  --save-every 100 --eval-every 100 \
   --wandb --wandb-entity echo-lab --wandb-project scicomp26
 ```
 
@@ -174,13 +211,16 @@ docker run --rm --pull=never --runtime=nvidia --gpus '"device=1,2"' --shm-size 6
 ## 4. 训练记录与 FLOPs 核算
 
 运行目录为 `../runs/<run-name>/`，保存 `console.log`、`run-plan.json`、`metrics.jsonl`、
-`step-<n>.pt`；启用 W&B 时增加 `wandb-run.json`。
+`step-<n>.pt`、各次启动的 `runtime_graph-start-<n>.json`；启用 W&B 时增加 `wandb-run.json`。
 原 DDP 训练器每个 optimizer update 记录 loss、lr、耗时及吞吐，满足不超过 10 步的记录间隔。
 最终分别归档到 `training/logs/FLOPs_3e17/`、`FLOPs_1e18/`、`FLOPs_3e18/`、`FLOPs_1e19/`。
 断点恢复须按累计 step 衔接日志，去除重复步；以选定 checkpoint 的实际 step 统计 tokens。
 
-`training/count_flops.py` 保留 infra 的标准稠密公式及适用范围检查，明确拒绝 Hybrid 类型。
-审计 GDN的 forward/backward FLOPs/token 后，可作如下累计核算：
+`training/count_flops.py` 的默认入口保留 infra 的标准稠密公式及适用范围检查。
+Hybrid 使用 `--auto-hybrid --scalar-op-cost 1` 或经过审计的 `--operator-ledger`；
+核算已完成训练时须提供完整 metrics、run-plan、checkpoint step，以及初始运行和
+每次恢复的 `--runtime-metadata runtime_graph-start-<n>.json`，核对实际模块和内核源码。
+审计 GDN 的 forward/backward FLOPs/token 后，也可作如下累计核算：
 
 ```bash
 python training/src/token_flops.py \

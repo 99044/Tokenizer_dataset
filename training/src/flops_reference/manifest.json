@@ -1,0 +1,156 @@
+{
+  "fla_commit": "3cf180339b8a1cbad823f553541cd531d18670ea",
+  "olmo_core_version": "2.6.0",
+  "files": {
+    "fla/ops/gated_delta_rule/chunk.py": {
+      "package": "fla",
+      "relative_path": "ops/gated_delta_rule/chunk.py",
+      "sha256": "809e7c69418230f67b0a6be179d5fb2fa84dd36140e348323078458f07b83b30",
+      "url": "https://github.com/fla-org/flash-linear-attention/blob/3cf180339b8a1cbad823f553541cd531d18670ea/fla/ops/gated_delta_rule/chunk.py"
+    },
+    "fla/ops/gated_delta_rule/wy_fast.py": {
+      "package": "fla",
+      "relative_path": "ops/gated_delta_rule/wy_fast.py",
+      "sha256": "897ab97a62bdc6d7d8b8bcf101bea30257aff3ea4bc0218805c035a6dc0b4430",
+      "url": "https://github.com/fla-org/flash-linear-attention/blob/3cf180339b8a1cbad823f553541cd531d18670ea/fla/ops/gated_delta_rule/wy_fast.py",
+      "upstream_sha256": "cc6c2bfdbf3b1a2c90bc0ef0c7325c53755a2a4fa440264cb39f4627d4c8de29",
+      "compatibility_patch": "training/src/patch_fla_torch26.py: multiply before transpose for Triton 3.2; same arithmetic"
+    },
+    "fla/ops/common/chunk_delta_h.py": {
+      "package": "fla",
+      "relative_path": "ops/common/chunk_delta_h.py",
+      "sha256": "5c9582580db14932ea8aa4745a14a8ea97d640cece5555cb724886c495e9e344",
+      "url": "https://github.com/fla-org/flash-linear-attention/blob/3cf180339b8a1cbad823f553541cd531d18670ea/fla/ops/common/chunk_delta_h.py"
+    },
+    "fla/ops/common/chunk_o.py": {
+      "package": "fla",
+      "relative_path": "ops/common/chunk_o.py",
+      "sha256": "548cd026c316d61d74e691c82c82165b7d12bc437f47ec2ac1e1f50bb48396be",
+      "url": "https://github.com/fla-org/flash-linear-attention/blob/3cf180339b8a1cbad823f553541cd531d18670ea/fla/ops/common/chunk_o.py"
+    },
+    "fla/ops/common/chunk_scaled_dot_kkt.py": {
+      "package": "fla",
+      "relative_path": "ops/common/chunk_scaled_dot_kkt.py",
+      "sha256": "5bea30f76080242a3e1d54c3e1aa366e9768a6811578631fc86684d226b48e53",
+      "url": "https://github.com/fla-org/flash-linear-attention/blob/3cf180339b8a1cbad823f553541cd531d18670ea/fla/ops/common/chunk_scaled_dot_kkt.py"
+    },
+    "fla/ops/utils/solve_tril.py": {
+      "package": "fla",
+      "relative_path": "ops/utils/solve_tril.py",
+      "sha256": "7872690e815d1a02b9f711630812b6283819a2a426de4b1ec76fdc4d95414f98",
+      "url": "https://github.com/fla-org/flash-linear-attention/blob/3cf180339b8a1cbad823f553541cd531d18670ea/fla/ops/utils/solve_tril.py"
+    },
+    "fla/ops/utils/cumsum.py": {
+      "package": "fla",
+      "relative_path": "ops/utils/cumsum.py",
+      "sha256": "7732bfc1a1e2581f3aa43a00b84950d3124952a3dd750af388083f817b0c4a11",
+      "url": "https://github.com/fla-org/flash-linear-attention/blob/3cf180339b8a1cbad823f553541cd531d18670ea/fla/ops/utils/cumsum.py"
+    },
+    "fla/modules/l2norm.py": {
+      "package": "fla",
+      "relative_path": "modules/l2norm.py",
+      "sha256": "dc856e6eb9d1396fb1a585cd4b40aa9633f6947257f2e90dd99804692c1f8cbb",
+      "url": "https://github.com/fla-org/flash-linear-attention/blob/3cf180339b8a1cbad823f553541cd531d18670ea/fla/modules/l2norm.py"
+    },
+    "fla/modules/layernorm_gated.py": {
+      "package": "fla",
+      "relative_path": "modules/layernorm_gated.py",
+      "sha256": "f9eac449d37ba16efc02918a6552f2c5c58c4b1ddd02625f6184e959361bb7ec",
+      "url": "https://github.com/fla-org/flash-linear-attention/blob/3cf180339b8a1cbad823f553541cd531d18670ea/fla/modules/layernorm_gated.py"
+    },
+    "fla/modules/conv/triton/kernels.py": {
+      "package": "fla",
+      "relative_path": "modules/conv/triton/kernels.py",
+      "sha256": "f87d8ba5e541b1cbd810081d08a7fa2138eebc5e73c34ac30b65b8dd41d128c1",
+      "url": "https://github.com/fla-org/flash-linear-attention/blob/3cf180339b8a1cbad823f553541cd531d18670ea/fla/modules/conv/triton/kernels.py"
+    },
+    "fla/modules/conv/triton/ops.py": {
+      "package": "fla",
+      "relative_path": "modules/conv/triton/ops.py",
+      "sha256": "a2c785515be71635a1373c30e54699b7aa506ab1c84bd2c8134c1fbd61e7a8b6",
+      "url": "https://github.com/fla-org/flash-linear-attention/blob/3cf180339b8a1cbad823f553541cd531d18670ea/fla/modules/conv/triton/ops.py"
+    },
+    "olmo_core/nn/attention/recurrent.py": {
+      "package": "olmo_core",
+      "relative_path": "nn/attention/recurrent.py",
+      "sha256": "f616c3382f8fda9adaf8c441816c45df5079a7d406eb3935f1ff6aa0008c52a3",
+      "version": "2.6.0",
+      "source": "installed scicomp26:submission-env-v1"
+    },
+    "olmo_core/nn/attention/flash_linear_attn_api.py": {
+      "package": "olmo_core",
+      "relative_path": "nn/attention/flash_linear_attn_api.py",
+      "sha256": "1e9f002c1911e869bc36b68757ef7b3b63911483d63bd9cb6a38474b5b1c573f",
+      "version": "2.6.0",
+      "source": "installed scicomp26:submission-env-v1"
+    },
+    "olmo_core/nn/attention/__init__.py": {
+      "package": "olmo_core",
+      "relative_path": "nn/attention/__init__.py",
+      "sha256": "7af569b60e1b1e710d9f099203ba8682820a5dedda244be9842fd91167be3f06",
+      "version": "2.6.0",
+      "source": "installed scicomp26:submission-env-v1"
+    },
+    "olmo_core/nn/layer_norm.py": {
+      "package": "olmo_core",
+      "relative_path": "nn/layer_norm.py",
+      "sha256": "55176bfc84533f0cde4ba0130e716241960ac722e778ee72369dccc54a70ee40",
+      "version": "2.6.0",
+      "source": "installed scicomp26:submission-env-v1"
+    },
+    "olmo_core/nn/feed_forward.py": {
+      "package": "olmo_core",
+      "relative_path": "nn/feed_forward.py",
+      "sha256": "f83c022ff00cbb7095ced0b676e0703af75695a3fac5b301c22f8dcc2cce26ab",
+      "version": "2.6.0",
+      "source": "installed scicomp26:submission-env-v1"
+    },
+    "olmo_core/nn/transformer/block.py": {
+      "package": "olmo_core",
+      "relative_path": "nn/transformer/block.py",
+      "sha256": "0674c7c7a2198d627ec3986abf60c9c91184df5a7d00dc97373ab678a3ce903a",
+      "version": "2.6.0",
+      "source": "installed scicomp26:submission-env-v1"
+    },
+    "olmo_core/nn/convolution.py": {
+      "package": "olmo_core",
+      "relative_path": "nn/convolution.py",
+      "sha256": "f6899b83f76d44b6357ac7c406c0563ec98703cdc34cdd12fe4ce52b9ac0718b",
+      "version": "2.6.0",
+      "source": "installed scicomp26:submission-env-v1"
+    },
+    "fla/modules/conv/causal_conv1d.py": {
+      "package": "fla",
+      "relative_path": "modules/conv/causal_conv1d.py",
+      "sha256": "4d5663e4a0d0c1d039ea035a5aed8800c643f58af35c2afc143278bebac86c54",
+      "url": "https://github.com/fla-org/flash-linear-attention/blob/3cf180339b8a1cbad823f553541cd531d18670ea/fla/modules/conv/causal_conv1d.py"
+    },
+    "fla/modules/conv/triton/__init__.py": {
+      "package": "fla",
+      "relative_path": "modules/conv/triton/__init__.py",
+      "sha256": "0eaea0534eeb919d87450a278fc45bca5e18e986886d05cbf5a7832dbe520403",
+      "url": "https://github.com/fla-org/flash-linear-attention/blob/3cf180339b8a1cbad823f553541cd531d18670ea/fla/modules/conv/triton/__init__.py"
+    },
+    "fla/ops/gated_delta_rule/__init__.py": {
+      "package": "fla",
+      "relative_path": "ops/gated_delta_rule/__init__.py",
+      "sha256": "6e976ac7219e132b62c2a7ccd21aa52c5ea46ad051b844ec3ae3a4d65623cfeb",
+      "url": "https://github.com/fla-org/flash-linear-attention/blob/3cf180339b8a1cbad823f553541cd531d18670ea/fla/ops/gated_delta_rule/__init__.py"
+    },
+    "olmo_core/nn/transformer/config.py": {
+      "package": "olmo_core",
+      "relative_path": "nn/transformer/config.py",
+      "sha256": "53f3b5e54d99fa117f976d3c78579dd8473b400f88ccb690b29b0c9e537cc8d4",
+      "version": "2.6.0",
+      "source": "installed scicomp26:submission-env-v1"
+    },
+    "olmo_core/nn/lm_head.py": {
+      "package": "olmo_core",
+      "relative_path": "nn/lm_head.py",
+      "sha256": "4dcb426df25b873a4d135fc0ea836847bb86067720d3f5297b68455ef953ea6a",
+      "version": "2.6.0",
+      "source": "installed scicomp26:submission-env-v1"
+    }
+  },
+  "compatibility_review": "2026-10-10: model build/init API separation; signal gate installation after initialization; diagnostic buffers on model device; cached data validation and progress logging do not change prediction arithmetic; FLA transpose/multiply patch preserves logical operations."
+}
