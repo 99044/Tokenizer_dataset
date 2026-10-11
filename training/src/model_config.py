@@ -22,16 +22,27 @@ def build_model_config(
     settings = load_settings(config_path)
     model = settings["model"]
     training = settings["training"]
+    configured_vocab = model.get("vocab_size")
+    if configured_vocab is not None and configured_vocab != vocab_size:
+        raise ValueError(
+            f"configured vocab_size={configured_vocab} does not match data vocab_size={vocab_size}"
+        )
 
     if model["activation"] != "swiglu" or training["dtype"] != "bfloat16":
         raise ValueError("the OLMo-core runner expects SwiGLU and bfloat16")
     head_dim = model.get("head_dim", model.get("attention_head_dim"))
+    hybrid_types = {"olmo_hybrid_1b", "olmo_hybrid_scaling"}
     if model["hidden_size"] != model["num_attention_heads"] * head_dim:
-        if model["type"] != "olmo_hybrid_1b":
+        if model["type"] not in hybrid_types:
             raise ValueError("hidden_size must equal num_attention_heads * head_dim")
 
-    if model["type"] == "olmo_hybrid_1b":
-        return _build_olmo_hybrid_1b(model, settings, vocab_size)
+    if model["type"] in hybrid_types:
+        return _build_olmo_hybrid(
+            model,
+            settings,
+            vocab_size,
+            strict_1b=model["type"] == "olmo_hybrid_1b",
+        )
 
     if model["type"] == "olmo3_1b":
         expected = {
@@ -84,43 +95,93 @@ def build_model_config(
     return olmo_config, model["context_length"], settings
 
 
-def _build_olmo_hybrid_1b(
-    model: dict[str, Any], settings: dict[str, Any], vocab_size: int
+def _build_olmo_hybrid(
+    model: dict[str, Any],
+    settings: dict[str, Any],
+    vocab_size: int,
+    *,
+    strict_1b: bool,
 ) -> tuple[TransformerConfig, int, dict[str, Any]]:
-    """Build a parameter-matched 1B OLMo Hybrid configuration.
+    """Build the fixed 1B preset or a member of its scaling family.
 
     The sequence mixer pattern is three GDN blocks followed by one global
     attention block. Dense SwiGLU feed-forward layers remain in every block.
     """
 
-    expected = {
-        "num_layers": 16,
-        "hidden_size": 1792,
-        "num_attention_heads": 14,
-        "num_key_value_heads": 14,
-        "attention_head_dim": 128,
-        "intermediate_size": 7168,
+    fixed_architecture = {
+        "activation": "swiglu",
+        "normalization": "rmsnorm",
         "normalization_style": "reordered_norm",
         "rms_norm_eps": 1.0e-6,
         "qk_norm": True,
+        "position_encoding": "rope",
         "rope_theta": 500000,
         "attention_window_pattern": [4096, 4096, 4096, -1],
+        "force_full_attention_on_first_layer": False,
+        "force_full_attention_on_last_layer": True,
         "block_pattern": ["gdn", "gdn", "gdn", "attn"],
-        "gdn_num_heads": 14,
-        "gdn_num_value_heads": 14,
         "gdn_head_dim": 96,
         "gdn_value_expand": 2.0,
         "gdn_allow_neg_eigval": True,
         "gdn_conv_size": 4,
         "gdn_norm_eps": 1.0e-5,
+        "context_length": 8192,
         "tie_word_embeddings": True,
+        "attention_bias": False,
+        "mlp_bias": False,
+        "dropout": 0.0,
     }
-    for key, value in expected.items():
+    for key, value in fixed_architecture.items():
         if model.get(key) != value:
             raise ValueError(
-                f"OLMo Hybrid 1B setting {key}={model.get(key)!r} does not match "
-                f"the parameter-matched preset value {value!r}"
+                f"OLMo Hybrid setting {key}={model.get(key)!r} does not match "
+                f"the scaling-family value {value!r}"
             )
+
+    if strict_1b:
+        expected_dimensions = {
+            "num_layers": 16,
+            "hidden_size": 1792,
+            "num_attention_heads": 14,
+            "num_key_value_heads": 14,
+            "attention_head_dim": 128,
+            "intermediate_size": 7168,
+            "gdn_num_heads": 14,
+            "gdn_num_value_heads": 14,
+        }
+        for key, value in expected_dimensions.items():
+            if model.get(key) != value:
+                raise ValueError(
+                    f"OLMo Hybrid 1B setting {key}={model.get(key)!r} does not match "
+                    f"the parameter-matched preset value {value!r}"
+                )
+    else:
+        integer_fields = (
+            "num_layers",
+            "hidden_size",
+            "num_attention_heads",
+            "num_key_value_heads",
+            "attention_head_dim",
+            "intermediate_size",
+            "gdn_num_heads",
+            "gdn_num_value_heads",
+        )
+        for key in integer_fields:
+            value = model.get(key)
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ValueError(f"OLMo Hybrid scaling setting {key} must be a positive integer")
+        if model["num_layers"] % len(model["block_pattern"]):
+            raise ValueError("num_layers must contain complete gdn/gdn/gdn/attn groups")
+        if model["hidden_size"] != model["num_attention_heads"] * model["attention_head_dim"]:
+            raise ValueError("hidden_size must equal num_attention_heads * attention_head_dim")
+        if model["num_key_value_heads"] != model["num_attention_heads"]:
+            raise ValueError("the reviewed scaling family uses equal attention and KV head counts")
+        if model["intermediate_size"] != 4 * model["hidden_size"]:
+            raise ValueError("the reviewed scaling family uses intermediate_size = 4 * hidden_size")
+        if model["gdn_num_heads"] != model["num_attention_heads"]:
+            raise ValueError("the reviewed scaling family keeps GDN and attention head counts equal")
+        if model["gdn_num_value_heads"] != model["gdn_num_heads"]:
+            raise ValueError("the reviewed scaling family uses equal GDN key and value head counts")
 
     from olmo_core.nn.attention import AttentionBackendName, SlidingWindowAttentionConfig
     from olmo_core.nn.attention.recurrent import GatedDeltaNetConfig

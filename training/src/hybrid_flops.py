@@ -105,14 +105,38 @@ def _reference_sources():
 
 def _validate_preset(settings):
     model = settings['model']
-    expected = dict(num_layers=16, hidden_size=1792, intermediate_size=7168,
-                    num_attention_heads=14, num_key_value_heads=14, attention_head_dim=128,
-                    gdn_num_heads=14, gdn_num_value_heads=14, gdn_head_dim=96,
-                    gdn_value_expand=2.0, gdn_conv_size=4, gdn_allow_neg_eigval=True,
-                    normalization_style='reordered_norm', qk_norm=True,
-                    tie_word_embeddings=True, attention_bias=False, mlp_bias=False, dropout=0.0,
-                    attention_window_pattern=[4096, 4096, 4096, -1],
-                    force_full_attention_on_first_layer=False, force_full_attention_on_last_layer=True)
+    expected = dict(
+        gdn_head_dim=96, gdn_value_expand=2.0, gdn_conv_size=4,
+        gdn_allow_neg_eigval=True, gdn_norm_eps=1.0e-5,
+        activation='swiglu', normalization='rmsnorm',
+        normalization_style='reordered_norm', rms_norm_eps=1.0e-6, qk_norm=True,
+        position_encoding='rope', rope_theta=500000, context_length=8192,
+        tie_word_embeddings=True, attention_bias=False, mlp_bias=False, dropout=0.0,
+        attention_window_pattern=[4096, 4096, 4096, -1],
+        force_full_attention_on_first_layer=False, force_full_attention_on_last_layer=True,
+        block_pattern=['gdn', 'gdn', 'gdn', 'attn'],
+    )
+    if model['type'] in {'olmo_hybrid_1b', 'olmo_hybrid_1b_with_signals'}:
+        expected.update(
+            num_layers=16, hidden_size=1792, intermediate_size=7168,
+            num_attention_heads=14, num_key_value_heads=14, attention_head_dim=128,
+            gdn_num_heads=14, gdn_num_value_heads=14,
+        )
+    elif model['type'] == 'olmo_hybrid_scaling':
+        if model.get('num_layers', 0) % 4:
+            raise ValueError('scaling num_layers must contain complete four-layer Hybrid groups')
+        if model.get('hidden_size') != model.get('num_attention_heads', 0) * model.get('attention_head_dim', 0):
+            raise ValueError('scaling hidden_size must equal attention heads * head dimension')
+        if model.get('intermediate_size') != 4 * model.get('hidden_size', 0):
+            raise ValueError('scaling intermediate_size must equal 4 * hidden_size')
+        if model.get('num_key_value_heads') != model.get('num_attention_heads'):
+            raise ValueError('scaling family requires equal attention and KV head counts')
+        if model.get('gdn_num_heads') != model.get('num_attention_heads'):
+            raise ValueError('scaling family requires equal GDN and attention head counts')
+        if model.get('gdn_num_value_heads') != model.get('gdn_num_heads'):
+            raise ValueError('scaling family requires equal GDN key and value head counts')
+    else:
+        raise ValueError(f'unsupported Hybrid preset {model["type"]!r}')
     for name, value in expected.items():
         if model.get(name) != value:
             raise ValueError(f'{name} differs from the reviewed Hybrid preset; use a reviewed custom ledger')
@@ -123,6 +147,37 @@ def _validate_preset(settings):
                                 detach=True, gate_granularity='headwise').items():
             if signal.get(name) != value:
                 raise ValueError(f'signal.{name} differs from the reviewed graph')
+
+
+def expected_parameter_count(shape, vocab_size, *, signals=False):
+    """Exact trainable parameter count for the reviewed tied-embedding graph."""
+
+    layers = integer(shape.get('num_layers'), 'model_shape.num_layers')
+    pattern = shape.get('block_pattern')
+    if pattern != ['gdn', 'gdn', 'gdn', 'attn'] or layers % len(pattern):
+        raise ValueError('parameter count requires complete Hybrid block groups')
+    gdn_layers = sum(pattern[layer % len(pattern)] == 'gdn' for layer in range(layers))
+    attention_layers = layers - gdn_layers
+    hidden = integer(shape.get('hidden_size'), 'model_shape.hidden_size')
+    intermediate = integer(shape.get('intermediate_size'), 'model_shape.intermediate_size')
+    attention_heads = integer(shape.get('num_attention_heads'), 'model_shape.num_attention_heads')
+    gdn_heads = integer(shape.get('gdn_num_heads'), 'model_shape.gdn_num_heads')
+    value_heads = integer(shape.get('gdn_num_value_heads'), 'model_shape.gdn_num_value_heads')
+    key = integer(shape.get('gdn_head_dim'), 'model_shape.gdn_head_dim')
+    value = integer(shape.get('gdn_value_dim'), 'model_shape.gdn_value_dim')
+    vocab = integer(vocab_size, 'padded_vocab_size')
+    return (
+        hidden * vocab
+        + layers * 3 * hidden * intermediate + (2 * layers + 1) * hidden
+        + gdn_layers * (
+            hidden * (2 * gdn_heads * key + 3 * value_heads * value + 2 * value_heads)
+            + 4 * (2 * gdn_heads * key + value_heads * value)
+            + 2 * value_heads + value
+        )
+        + attention_layers * (4 * hidden * hidden + 2 * hidden)
+        + (attention_layers * (hidden * attention_heads + 2 * attention_heads)
+           if signals else 0)
+    )
 
 
 def chunk_delta_operations(batch, sequence, heads, key, value, scalar_cost):
@@ -535,39 +590,51 @@ def verify_runtime_metadata(path, ledger):
             if name.endswith('signal_hybrid.py') and ledger['model_type'] == 'olmo_hybrid_1b':
                 continue
             raise ValueError(f'runtime model/runner source differs: {name}')
+    shape = ledger.get('model_shape', {})
+    layers = integer(shape.get('num_layers'), 'model_shape.num_layers')
+    pattern = shape.get('block_pattern')
+    if pattern != ['gdn', 'gdn', 'gdn', 'attn'] or layers % len(pattern):
+        raise ValueError('runtime Hybrid block pattern differs from the reviewed graph')
+    gdn_layers = sum(pattern[layer % len(pattern)] == 'gdn' for layer in range(layers))
+    attention_layers = layers - gdn_layers
+    hidden = integer(shape.get('hidden_size'), 'model_shape.hidden_size')
+    intermediate = integer(shape.get('intermediate_size'), 'model_shape.intermediate_size')
+    heads = integer(shape.get('gdn_num_heads'), 'model_shape.gdn_num_heads')
+    value_heads = integer(shape.get('gdn_num_value_heads'), 'model_shape.gdn_num_value_heads')
+    key = integer(shape.get('gdn_head_dim'), 'model_shape.gdn_head_dim')
+    value = integer(shape.get('gdn_value_dim'), 'model_shape.gdn_value_dim')
     conv = metadata.get('convolution_modules', [])
-    if len(conv) != 36 or any(module.get('backend') != 'triton' or module.get('activation') not in {'silu', 'swish'} or module.get('bias') is not False or module.get('cp_enabled') is not False or module.get('kernel_size') != [4] for module in conv):
-        raise ValueError('runtime convolution graph differs from the reviewed 12 x 3 bias-free Triton convolutions')
+    if len(conv) != 3 * gdn_layers or any(module.get('backend') != 'triton' or module.get('activation') not in {'silu', 'swish'} or module.get('bias') is not False or module.get('cp_enabled') is not False or module.get('kernel_size') != [4] for module in conv):
+        raise ValueError('runtime convolution graph differs from the reviewed bias-free Triton convolutions')
     expected_linears = {}
     def linear(input_width, output_width, copies):
         key = f'{input_width}:{output_width}'
         expected_linears[key] = expected_linears.get(key, 0) + copies
-    hidden, intermediate, heads, key, value = 1792, 7168, 14, 96, 192
-    linear(hidden, intermediate, 32)
-    linear(intermediate, hidden, 16)
-    linear(hidden, heads * key, 24)
-    linear(hidden, heads * value, 24)
-    linear(heads * value, hidden, 12)
-    linear(hidden, heads, 24)
-    linear(hidden, hidden, 16)
+    linear(hidden, intermediate, 2 * layers)
+    linear(intermediate, hidden, layers)
+    linear(hidden, heads * key, 2 * gdn_layers)
+    linear(hidden, value_heads * value, 2 * gdn_layers)
+    linear(value_heads * value, hidden, gdn_layers)
+    linear(hidden, value_heads, 2 * gdn_layers)
+    linear(hidden, hidden, 4 * attention_layers)
     linear(hidden, ledger['batch_shape']['padded_vocab_size'], 1)
     signals = ledger['model_type'].endswith('_with_signals')
     if signals:
-        linear(hidden, heads, 4)
+        linear(hidden, shape['num_attention_heads'], attention_layers)
     if metadata.get('linear_shapes') != expected_linears:
         raise ValueError('runtime linear projections differ from the reviewed graph')
-    expected_parameters = (
-        hidden * ledger['batch_shape']['padded_vocab_size']
-        + 16 * 3 * hidden * intermediate + 33 * hidden
-        + 12 * (hidden * (2 * heads * key + 3 * heads * value + 2 * heads)
-                + 4 * heads * (2 * key + value) + 2 * heads + value)
-        + 4 * (4 * hidden * hidden + 2 * hidden)
-        + (4 * (hidden * heads + 2 * heads) if signals else 0)
+    expected_parameters = expected_parameter_count(
+        shape,
+        ledger['batch_shape']['padded_vocab_size'],
+        signals=signals,
     )
     if metadata.get('parameter_count') != expected_parameters:
         raise ValueError('runtime parameter coverage differs from the reviewed all-trainable graph')
     from collections import Counter
-    if Counter(module.get('channels') for module in conv) != Counter({heads * key: 24, heads * value: 12}):
+    expected_channels = Counter()
+    expected_channels[heads * key] += 2 * gdn_layers
+    expected_channels[value_heads * value] += gdn_layers
+    if Counter(module.get('channels') for module in conv) != expected_channels:
         raise ValueError('runtime convolution channel dimensions differ from the reviewed graph')
     return dict(path=str(path), sha256=file_hash(path), kernel_sources_match=True,
                 all_parameters_trainable=True, scalar_convention_is_officially_specified=False,

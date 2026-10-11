@@ -17,6 +17,7 @@ def resolve_training_options(args):
         'learning_rate': ('optimizer', 'learning_rate', 2e-4),
         'warmup_steps': ('scheduler', 'warmup_steps', 0),
         'eval_every': ('logging', 'eval_every_steps', 10),
+        'eval_batches': ('logging', 'eval_batches', 2),
         'save_every': ('logging', 'checkpoint_every_steps', 10),
     }
     for name, (section, key, fallback) in fields.items():

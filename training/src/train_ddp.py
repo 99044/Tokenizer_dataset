@@ -50,7 +50,7 @@ def main():
     p.add_argument('--learning-rate', type=float)
     p.add_argument('--warmup-steps', type=int)
     p.add_argument('--eval-every', type=int)
-    p.add_argument('--eval-batches', type=int, default=2)
+    p.add_argument('--eval-batches', type=int)
     p.add_argument('--save-every', type=int)
     p.add_argument('--resume', type=Path)
     p.add_argument('--wandb', action='store_true', help='Upload metrics to W&B from rank 0')
@@ -98,9 +98,19 @@ def main():
             eps=settings['optimizer']['eps'], weight_decay=settings['optimizer']['weight_decay'],
         )
 
+        scheduler_settings = settings['scheduler']
+        scheduler_name = scheduler_settings['name']
+        cooldown_steps = int(scheduler_settings.get('cooldown_steps') or 0)
+        if scheduler_name not in {'constant', 'cosine'}:
+            raise ValueError(f'不支持的 scheduler.name: {scheduler_name!r}')
+        if cooldown_steps:
+            raise ValueError('当前 runner 尚未实现从阶段 A checkpoint 分支 cooldown')
+
         def lr_factor(completed):
             if completed < args.warmup_steps:
                 return (completed + 1) / args.warmup_steps
+            if scheduler_name == 'constant':
+                return 1.0
             progress = (completed - args.warmup_steps) / (args.max_steps - args.warmup_steps)
             return 0.5 * (1 + math.cos(math.pi * min(progress, 1)))
 
@@ -139,8 +149,9 @@ def main():
             print(f'resolved training options: micro_batch_size={args.micro_batch_size} '
                   f'grad_accum_steps={args.grad_accum_steps} learning_rate={args.learning_rate} '
                   f'warmup_steps={args.warmup_steps} max_steps={args.max_steps} '
-                  f'eval_every={args.eval_every} save_every={args.save_every}', flush=True)
-            if settings['model']['type'] == 'olmo_hybrid_1b':
+                  f'eval_every={args.eval_every} eval_batches={args.eval_batches} '
+                  f'save_every={args.save_every}', flush=True)
+            if settings['model']['type'] in {'olmo_hybrid_1b', 'olmo_hybrid_scaling'}:
                 from hybrid_flops import runtime_graph_metadata
 
                 runtime_metadata = runtime_graph_metadata(model)
@@ -205,14 +216,17 @@ def main():
             step_seconds = time.perf_counter() - step_started
             metrics = {
                 'step': step, 'train/loss': mean_loss, 'lr': used_lr,
+                'train/tokens': step * tokens_per_step,
                 'train/step_seconds': step_seconds,
                 'train/tokens_per_second': tokens_per_step / step_seconds,
             }
             if step % args.eval_every == 0 or step == stop_step:
-                metrics['validation/loss'] = evaluate(
+                validation_loss = evaluate(
                     model, validation, args.micro_batch_size, args.eval_batches,
                     vocab_size, device, seed + 100000 + rank,
                 )
+                metrics['validation/loss'] = validation_loss
+                metrics['validation/token_nll'] = validation_loss
             metrics['elapsed_seconds'] = time.perf_counter() - run_started
             if rank == 0:
                 print(json.dumps(metrics), flush=True)

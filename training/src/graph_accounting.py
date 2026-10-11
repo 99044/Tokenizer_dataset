@@ -19,7 +19,7 @@ import sys
 
 
 SCHEMA = 'scicomp26-graph-flops-v1'
-HYBRID_TYPES = {'olmo_hybrid_1b', 'olmo_hybrid_1b_with_signals'}
+HYBRID_TYPES = {'olmo_hybrid_1b', 'olmo_hybrid_scaling', 'olmo_hybrid_1b_with_signals'}
 EXCLUSIONS = {'optimizer_update', 'activation_recomputation', 'communication'}
 
 
@@ -82,7 +82,7 @@ def operation_flops(operation):
 
 def required_components(model):
     if model.get('type') not in HYBRID_TYPES:
-        raise ValueError('graph templates currently cover the two fixed Hybrid architectures')
+        raise ValueError('graph templates currently cover the reviewed Hybrid architectures')
     if model.get('context_length') != 8192 or model.get('activation') != 'swiglu':
         raise ValueError('review the graph for a changed sequence length or activation first')
     layers = integer(model.get('num_layers'), 'num_layers')
@@ -201,6 +201,14 @@ def make_template(model_config, settings, micro_batch_size, vocab_size):
         schema=SCHEMA, status='incomplete', model_type=model['type'],
         model_config_sha256=file_hash(model_config),
         batch_shape=dict(micro_batch_size=micro, sequence_length=sequence, padded_vocab_size=vocab),
+        model_shape=dict(
+            num_layers=model['num_layers'], block_pattern=pattern,
+            hidden_size=hidden, intermediate_size=intermediate,
+            num_attention_heads=heads, num_key_value_heads=kv_heads,
+            attention_head_dim=head_dim, gdn_num_heads=gdn_heads,
+            gdn_num_value_heads=value_heads, gdn_head_dim=key_dim,
+            gdn_value_dim=value_dim,
+        ),
         source_files=sources, components=components,
         notes=[
             'Fill every component, attach local source SHA-256 evidence and set status=reviewed; only then set top-level status=complete.',
@@ -225,6 +233,19 @@ def audit_ledger(ledger, model_config, settings, micro_batch_size, vocab_size, s
     shape = dict(micro_batch_size=micro_batch_size, sequence_length=model['context_length'], padded_vocab_size=vocab_size)
     if ledger.get('batch_shape') != shape:
         raise ValueError('ledger batch/sequence/vocabulary dimensions differ from the actual run')
+    value_dim = Decimal(str(model['gdn_value_expand'])) * model['gdn_head_dim']
+    expected_model_shape = dict(
+        num_layers=model['num_layers'], block_pattern=model['block_pattern'],
+        hidden_size=model['hidden_size'], intermediate_size=model['intermediate_size'],
+        num_attention_heads=model['num_attention_heads'],
+        num_key_value_heads=model['num_key_value_heads'],
+        attention_head_dim=model['attention_head_dim'],
+        gdn_num_heads=model['gdn_num_heads'],
+        gdn_num_value_heads=model['gdn_num_value_heads'],
+        gdn_head_dim=model['gdn_head_dim'], gdn_value_dim=int(value_dim),
+    )
+    if ledger.get('model_shape') != expected_model_shape:
+        raise ValueError('ledger model dimensions differ from the actual configuration')
     sources = ledger.get('source_files')
     if not isinstance(sources, dict) or not sources:
         raise ValueError('source files and SHA-256 evidence are required')
