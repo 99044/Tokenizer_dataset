@@ -15,6 +15,7 @@ LEARNING_RATE=""
 WARMUP_STEPS=""
 STOP_AFTER=""
 RESUME=""
+BRANCH_FROM=""
 EVAL_EVERY=""
 SAVE_EVERY=""
 SHM_SIZE=64g
@@ -36,11 +37,11 @@ usage() {
   cat <<'HELP'
 Usage (on the host): bash training/train.sh [options]
 
-Prepare raw JSONL if needed, then launch the branch's original Hybrid DDP runner.
+Prepare raw JSONL if needed, then launch the branch's Hybrid DDP runner.
 Training steps are explicit: dense OLMo3 FLOPs planning does not apply to GDN.
 
   --config PATH       Model YAML inside this repository (default: training/configs/FLOPs_3e17.yaml)
-  --stage stage1      Random-initialization training, or restart with --resume
+  --stage NAME        stage1 or stage-b (default: stage1)
   --gpus IDS          Comma-separated host GPU indices (default: 0,3)
   --steps N           Override training.max_steps (null/missing fallback: 20; no automatic FLOPs certification)
   --micro-batch-size N Override training.micro_batch_size (null/missing fallback: 1)
@@ -49,6 +50,7 @@ Training steps are explicit: dense OLMo3 FLOPs planning does not apply to GDN.
   --warmup-steps N     Override scheduler.warmup_steps (null/missing fallback: 0)
   --stop-after N       Stop at this cumulative step, preserving the LR schedule
   --resume PATH        Restart the same training plan from a native checkpoint
+  --branch-from PATH   Start a declared Stage B continuation from a Stage A checkpoint
   --eval-every N       Override logging.eval_every_steps (null/missing fallback: 10)
   --save-every N       Override logging.checkpoint_every_steps (null/missing fallback: 10)
   --image NAME         Docker image (default: scicomp26:submission-env-hybrid-v3)
@@ -87,6 +89,7 @@ while [[ $# -gt 0 ]]; do
     --warmup-steps) need_value "$@"; WARMUP_STEPS="$2"; shift 2 ;;
     --stop-after) need_value "$@"; STOP_AFTER="$2"; shift 2 ;;
     --resume) need_value "$@"; RESUME="$2"; shift 2 ;;
+    --branch-from) need_value "$@"; BRANCH_FROM="$2"; shift 2 ;;
     --eval-every) need_value "$@"; EVAL_EVERY="$2"; shift 2 ;;
     --save-every) need_value "$@"; SAVE_EVERY="$2"; shift 2 ;;
     --image) need_value "$@"; IMAGE="$2"; shift 2 ;;
@@ -105,13 +108,18 @@ while [[ $# -gt 0 ]]; do
     --shm-size) need_value "$@"; SHM_SIZE="$2"; shift 2 ;;
     --dry-run) DRY_RUN=true; shift ;;
     -h|--help) usage; exit 0 ;;
-    --target-flops|--training-tokens|--global-batch-tokens|--init-from) fail "Hybrid preserves the original runner; use --steps and --resume. GDN FLOPs planning needs separate accounting." ;;
+    --target-flops|--training-tokens|--global-batch-tokens|--init-from) fail "Use --steps for a fixed plan, --resume to restart it, or --branch-from for declared Stage B continuation. GDN FLOPs planning needs separate accounting." ;;
     *) fail "Unknown option: $1 (see --help)" ;;
   esac
 done
 
 [[ ! -f /.dockerenv ]] || fail "Run this script in a host terminal, outside Docker."
-[[ "$STAGE" == stage1 ]] || fail "The original Hybrid runner supports stage1 only"
+[[ "$STAGE" == stage1 || "$STAGE" == stage-b ]] || fail "--stage must be stage1 or stage-b"
+[[ -z "$RESUME" || -z "$BRANCH_FROM" ]] || fail "--resume and --branch-from cannot be used together"
+if [[ "$STAGE" == stage-b && -z "$RESUME" && -z "$BRANCH_FROM" ]]; then
+  fail "stage-b needs --branch-from, or --resume for an interrupted Stage B run"
+fi
+[[ -z "$BRANCH_FROM" || "$STAGE" == stage-b ]] || fail "--branch-from requires --stage stage-b"
 [[ -n "$DATA_DIR" ]] || fail "Training needs an explicit --data-dir"
 [[ "$DATA_FORMAT" == auto || "$DATA_FORMAT" == packed || "$DATA_FORMAT" == jsonl ]] || fail "--data-format must be auto, packed or jsonl"
 RUN_NAME="${RUN_NAME:-olmo-hybrid-$STAGE-$(date +%Y%m%d-%H%M%S)-$$}"
@@ -126,10 +134,10 @@ done
 [[ "$RUN_NAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]] || fail "Invalid --run-name"
 IFS=, read -r -a GPU_LIST <<< "$GPUS"
 NPROC=${#GPU_LIST[@]}
-declare -A SEEN_GPUS=()
+SEEN_GPUS=,
 for gpu in "${GPU_LIST[@]}"; do
-  [[ -z "${SEEN_GPUS[$gpu]+present}" ]] || fail "Duplicate GPU index: $gpu"
-  SEEN_GPUS[$gpu]=1
+  [[ "$SEEN_GPUS" != *",$gpu,"* ]] || fail "Duplicate GPU index: $gpu"
+  SEEN_GPUS+="$gpu,"
 done
 
 for cmd in docker realpath tee sha256sum; do
@@ -171,11 +179,16 @@ else
 fi
 CHECKPOINT_DOCKER_ARGS=()
 CHECKPOINT_TRAIN_ARGS=()
-if [[ -n "$RESUME" ]]; then
-  CHECKPOINT="$(realpath -e -- "$RESUME")"
+if [[ -n "$RESUME" || -n "$BRANCH_FROM" ]]; then
+  CHECKPOINT_SOURCE="${RESUME:-$BRANCH_FROM}"
+  CHECKPOINT="$(realpath -e -- "$CHECKPOINT_SOURCE")"
   [[ -f "$CHECKPOINT" && -r "$CHECKPOINT" ]] || fail "Checkpoint must be a readable file"
   CHECKPOINT_DOCKER_ARGS=(--mount "type=bind,src=$CHECKPOINT,dst=/checkpoints/input.pt,readonly")
-  CHECKPOINT_TRAIN_ARGS=(--resume /checkpoints/input.pt)
+  if [[ -n "$RESUME" ]]; then
+    CHECKPOINT_TRAIN_ARGS=(--resume /checkpoints/input.pt)
+  else
+    CHECKPOINT_TRAIN_ARGS=(--branch-from /checkpoints/input.pt)
+  fi
 fi
 if [[ "$DRY_RUN" == false ]]; then
   docker info >/dev/null 2>&1 || fail "Cannot access Docker; check daemon and account permissions"

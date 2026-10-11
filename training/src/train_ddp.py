@@ -38,6 +38,75 @@ def evaluate(model, sampler, batch_size, batches, vocab_size, device, seed):
     return (total[0] / total[1]).item()
 
 
+def configured_steps(settings, key):
+    values = settings.get('logging', {}).get(key, [])
+    if values is None:
+        return set()
+    if not isinstance(values, list) or any(
+        isinstance(value, bool) or not isinstance(value, int) or value <= 0
+        for value in values
+    ):
+        raise ValueError(f'logging.{key} 必须是正整数列表')
+    return set(values)
+
+
+def validate_branch_checkpoint(checkpoint, settings, metadata, plan):
+    continuation = settings.get('continuation')
+    if not isinstance(continuation, dict):
+        raise ValueError('--branch-from 只适用于包含 continuation 配置的实验')
+    expected_step = continuation.get('source_checkpoint_step')
+    if checkpoint.get('step') != expected_step:
+        raise ValueError(
+            f'分支 checkpoint step={checkpoint.get("step")!r}，配置要求 step={expected_step!r}'
+        )
+    source_plan = checkpoint.get('plan')
+    if not isinstance(source_plan, dict):
+        raise ValueError('分支 checkpoint 缺少训练 plan')
+    source_settings = source_plan.get('settings') or {}
+    if source_settings.get('model') != settings.get('model'):
+        raise ValueError('分支 checkpoint 的模型配置与当前配置不一致')
+    if source_settings.get('optimizer') != settings.get('optimizer'):
+        raise ValueError('分支 checkpoint 的 optimizer 配置与当前配置不一致')
+    if (
+        continuation.get('scheduler_state') == 'preserve'
+        and source_settings.get('scheduler', {}).get('name')
+        != settings.get('scheduler', {}).get('name')
+    ):
+        raise ValueError('保留 scheduler 状态时，源配置与当前 scheduler 类型必须一致')
+    if source_plan.get('data') != metadata:
+        raise ValueError('分支 checkpoint 的数据 metadata 与当前数据不一致')
+    if source_settings.get('run', {}).get('seed') != settings.get('run', {}).get('seed'):
+        raise ValueError('分支 checkpoint 的随机种子与当前配置不一致')
+    source_tokens_per_step = (
+        source_plan.get('world_size', 0)
+        * source_plan.get('micro_batch_size', 0)
+        * source_plan.get('grad_accum_steps', 0)
+        * settings['model']['context_length']
+    )
+    current_tokens_per_step = (
+        plan['world_size']
+        * plan['micro_batch_size']
+        * plan['grad_accum_steps']
+        * settings['model']['context_length']
+    )
+    if source_tokens_per_step != current_tokens_per_step:
+        raise ValueError('分支训练必须保持每次参数更新的 token 数不变')
+    rng_by_rank = checkpoint.get('rng_by_rank')
+    if not isinstance(rng_by_rank, list) or len(rng_by_rank) != plan['world_size']:
+        raise ValueError('分支训练必须保持 GPU 数量不变，才能恢复各 rank 的 RNG 状态')
+    return continuation
+
+
+def position_scheduler(scheduler, optimizer, completed_steps, lr_factor):
+    """Position a fresh scheduler at an absolute step for a branched run."""
+    scheduler.last_epoch = completed_steps
+    scheduler._step_count = completed_steps + 1
+    lrs = [base_lr * lr_factor(completed_steps) for base_lr in scheduler.base_lrs]
+    for group, lr in zip(optimizer.param_groups, lrs):
+        group['lr'] = lr
+    scheduler._last_lr = lrs
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument('--config', type=Path, default=Path('training/configs/FLOPs_3e17.yaml'))
@@ -53,11 +122,17 @@ def main():
     p.add_argument('--eval-batches', type=int)
     p.add_argument('--save-every', type=int)
     p.add_argument('--resume', type=Path)
+    p.add_argument(
+        '--branch-from', type=Path,
+        help='Start a declared continuation plan from a Stage A checkpoint',
+    )
     p.add_argument('--wandb', action='store_true', help='Upload metrics to W&B from rank 0')
     p.add_argument('--wandb-entity', help='Override the configured W&B entity')
     p.add_argument('--wandb-project', help='Override the configured W&B project')
     p.add_argument('--wandb-name', help='W&B run name (default: output directory name)')
     args = resolve_training_options(p.parse_args())
+    if args.resume and args.branch_from:
+        raise ValueError('--resume 与 --branch-from 不能同时使用')
     for name in ['max_steps', 'micro_batch_size', 'grad_accum_steps', 'eval_every', 'eval_batches', 'save_every']:
         if getattr(args, name) <= 0:
             raise ValueError(f'{name} 必须为正数')
@@ -101,12 +176,29 @@ def main():
         scheduler_settings = settings['scheduler']
         scheduler_name = scheduler_settings['name']
         cooldown_steps = int(scheduler_settings.get('cooldown_steps') or 0)
-        if scheduler_name not in {'constant', 'cosine'}:
+        if scheduler_name not in {'constant', 'cosine', 'linear_cooldown'}:
             raise ValueError(f'不支持的 scheduler.name: {scheduler_name!r}')
-        if cooldown_steps:
-            raise ValueError('当前 runner 尚未实现从阶段 A checkpoint 分支 cooldown')
+        continuation = settings.get('continuation')
+        if continuation and not (args.branch_from or args.resume):
+            raise ValueError('continuation 配置必须使用 --branch-from，或用 --resume 恢复其自身 checkpoint')
+        if scheduler_name == 'linear_cooldown':
+            if not isinstance(continuation, dict):
+                raise ValueError('linear_cooldown 需要 continuation 配置')
+            source_step = continuation.get('source_checkpoint_step')
+            if cooldown_steps != args.max_steps - source_step or args.warmup_steps != 0:
+                raise ValueError('linear_cooldown 要求 cooldown_steps=max_steps-source_step 且 warmup_steps=0')
+            final_lr_ratio = float(scheduler_settings.get('final_lr_ratio', 0.0))
+            if not 0.0 <= final_lr_ratio < 1.0:
+                raise ValueError('scheduler.final_lr_ratio 必须在 [0, 1)')
+        elif cooldown_steps:
+            raise ValueError('cooldown_steps 只能与 linear_cooldown 一起使用')
 
         def lr_factor(completed):
+            if scheduler_name == 'linear_cooldown':
+                if completed <= source_step:
+                    return 1.0
+                progress = min((completed - source_step) / cooldown_steps, 1.0)
+                return 1.0 + (final_lr_ratio - 1.0) * progress
             if completed < args.warmup_steps:
                 return (completed + 1) / args.warmup_steps
             if scheduler_name == 'constant':
@@ -122,8 +214,10 @@ def main():
         )
         start_step = 0
         resumed_rng = None
+        checkpoint_path = args.resume or args.branch_from
+        if checkpoint_path:
+            checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=True)
         if args.resume:
-            checkpoint = torch.load(args.resume, map_location='cpu', weights_only=True)
             if checkpoint['plan'] != plan:
                 raise ValueError('恢复时 GPU 数量、训练计划、配置与数据 metadata 必须一致')
             model.load_state_dict(checkpoint['model'], strict=True)
@@ -131,6 +225,20 @@ def main():
             scheduler.load_state_dict(checkpoint['scheduler'])
             start_step = int(checkpoint['step'])
             resumed_rng = checkpoint['rng_by_rank'][rank]
+            del checkpoint
+        elif args.branch_from:
+            continuation = validate_branch_checkpoint(checkpoint, settings, metadata, plan)
+            model.load_state_dict(checkpoint['model'], strict=True)
+            optimizer.load_state_dict(checkpoint['optimizer'])
+            start_step = int(checkpoint['step'])
+            resumed_rng = checkpoint['rng_by_rank'][rank]
+            scheduler_state = continuation.get('scheduler_state')
+            if scheduler_state == 'preserve':
+                scheduler.load_state_dict(checkpoint['scheduler'])
+            elif scheduler_state == 'restart':
+                position_scheduler(scheduler, optimizer, start_step, lr_factor)
+            else:
+                raise ValueError('continuation.scheduler_state 必须为 preserve 或 restart')
             del checkpoint
         if start_step >= stop_step:
             raise ValueError('恢复位置已经达到 stop-after/max-steps，请检查训练计划')
@@ -143,6 +251,12 @@ def main():
         validation = PackedTokenSampler(args.data_dir / 'validation.npy', context_length, vocab_size, seed + rank, metadata)
         global_batch = world * args.micro_batch_size * args.grad_accum_steps
         tokens_per_step = global_batch * context_length
+        eval_steps = configured_steps(settings, 'eval_steps')
+        checkpoint_steps = configured_steps(settings, 'checkpoint_steps')
+        for label, steps in [('eval_steps', eval_steps), ('checkpoint_steps', checkpoint_steps)]:
+            outside = sorted(step for step in steps if step > args.max_steps)
+            if outside:
+                raise ValueError(f'logging.{label} 不能超过 max_steps={args.max_steps}：{outside}')
         if rank == 0:
             args.output_dir.mkdir(parents=True, exist_ok=True)
             (args.output_dir / 'run-plan.json').write_text(json.dumps(plan, indent=2, ensure_ascii=False))
@@ -220,7 +334,7 @@ def main():
                 'train/step_seconds': step_seconds,
                 'train/tokens_per_second': tokens_per_step / step_seconds,
             }
-            if step % args.eval_every == 0 or step == stop_step:
+            if step % args.eval_every == 0 or step in eval_steps or step == stop_step:
                 validation_loss = evaluate(
                     model, validation, args.micro_batch_size, args.eval_batches,
                     vocab_size, device, seed + 100000 + rank,
@@ -235,7 +349,7 @@ def main():
                 if wandb_run is not None:
                     wandb_run.log(metrics, step=step)
 
-            if step % args.save_every == 0 or step == stop_step:
+            if step % args.save_every == 0 or step in checkpoint_steps or step == stop_step:
                 rng = {'cpu': torch.get_rng_state(), 'cuda': torch.cuda.get_rng_state(device)}
                 all_rng = [None] * world
                 dist.all_gather_object(all_rng, rng)

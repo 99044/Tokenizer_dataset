@@ -67,4 +67,4 @@ torchrun --standalone --nproc-per-node=2 evaluation/eval_native_checkpoint.py \
 
 每个输出 JSON 已包含拟合需要的 `run_id`、`N_total`、`N_nonembed`、`D`、`FLOPs`、`bpb`、学习率、schedule 和 seed。同一个 checkpoint 输出文件不可覆盖。
 
-阶段 A 完成后再根据 BPB 曲线决定阶段 B：延长哪个中等规模模型，以及从哪些 checkpoint 分支 cooldown。阶段 B 不应在看到阶段 A 结果前固定成六个模型都继续训练。
+阶段 A 的实测结果已经确定只运行 B1–B3：延长 330M 的 constant-LR 曲线，并从 190M、250M 的中间 checkpoint 分支 cooldown。配置、恢复规则和精确预算见 [`../scaling_stage_b/README.md`](../scaling_stage_b/README.md)。
