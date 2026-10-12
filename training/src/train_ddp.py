@@ -182,11 +182,19 @@ def main():
         if continuation and not (args.branch_from or args.resume):
             raise ValueError('continuation 配置必须使用 --branch-from，或用 --resume 恢复其自身 checkpoint')
         if scheduler_name == 'linear_cooldown':
-            if not isinstance(continuation, dict):
-                raise ValueError('linear_cooldown 需要 continuation 配置')
-            source_step = continuation.get('source_checkpoint_step')
-            if cooldown_steps != args.max_steps - source_step or args.warmup_steps != 0:
-                raise ValueError('linear_cooldown 要求 cooldown_steps=max_steps-source_step 且 warmup_steps=0')
+            if cooldown_steps <= 0 or cooldown_steps >= args.max_steps:
+                raise ValueError('linear_cooldown 要求 0 < cooldown_steps < max_steps')
+            if isinstance(continuation, dict):
+                source_step = continuation.get('source_checkpoint_step')
+                if cooldown_steps != args.max_steps - source_step or args.warmup_steps != 0:
+                    raise ValueError(
+                        'checkpoint 分支的 linear_cooldown 要求 '
+                        'cooldown_steps=max_steps-source_step 且 warmup_steps=0'
+                    )
+            else:
+                source_step = args.max_steps - cooldown_steps
+                if args.warmup_steps >= source_step:
+                    raise ValueError('warmup 必须在 linear cooldown 开始前结束')
             final_lr_ratio = float(scheduler_settings.get('final_lr_ratio', 0.0))
             if not 0.0 <= final_lr_ratio < 1.0:
                 raise ValueError('scheduler.final_lr_ratio 必须在 [0, 1)')
@@ -194,13 +202,13 @@ def main():
             raise ValueError('cooldown_steps 只能与 linear_cooldown 一起使用')
 
         def lr_factor(completed):
+            if completed < args.warmup_steps:
+                return (completed + 1) / args.warmup_steps
             if scheduler_name == 'linear_cooldown':
                 if completed <= source_step:
                     return 1.0
                 progress = min((completed - source_step) / cooldown_steps, 1.0)
                 return 1.0 + (final_lr_ratio - 1.0) * progress
-            if completed < args.warmup_steps:
-                return (completed + 1) / args.warmup_steps
             if scheduler_name == 'constant':
                 return 1.0
             progress = (completed - args.warmup_steps) / (args.max_steps - args.warmup_steps)

@@ -1,6 +1,6 @@
 # 环境与运行说明
 
-本文对应 `olmo_hybrid_1b`，工作目录为仓库根目录。目录与 `infra` 对齐，
+本文对应 `olmo_hybrid_250m`，工作目录为仓库根目录。目录与 `infra` 对齐，
 模型实现、训练循环和四档模型配置保留本分支版本；不复用 OLMo3 的历史训练记录。
 
 ## 1. 环境与镜像
@@ -87,126 +87,78 @@ docker run --rm --pull=never --network none \
 
 原训练器未读取 `is_text` 掩码，也未传递 `cu_doc_lens` 文档边界；本次保留原采样和 loss 行为。
 GDN 文档边界重置仍需后续数据接口适配。
-已验证两卡训练前向、反向和参数更新；完整预算训练仍在进行。
+本分支提供代码和训练计划；GPU 运行验证及完整预算训练由 infra 组执行。
 
 ## 3. 四档配置与训练
 
-四档配置分别为 `training/configs/FLOPs_3e17.yaml`、`FLOPs_1e18.yaml`、
-`FLOPs_3e18.yaml`、`FLOPs_1e19.yaml`。模型结构、信号配置及预算值保留原文件。
+四档配置文件名保持提交规范不变：
 
-| 设置 | 原训练器及下列命令 |
-| --- | --- |
-| 随机种子 | 42 |
-| 优化器 | AdamW，betas=(0.9, 0.95)，eps=1e-8，weight decay=0.1，gradient clip=1.0 |
-| 学习率与调度 | 显式 CLI 优先，否则读取 YAML 的 optimizer.learning_rate / scheduler.warmup_steps；null 或缺失时回退 2e-4 / 0；后续 cosine |
-| 序列长度 / 精度 | 8192 / bfloat16 |
-| 硬件与并行 | 两张 A100，GPU 0、1，torchrun DDP，一卡一个进程 |
-| batch | 1e19 YAML 每卡 1 条序列，累积 32 次；两卡全局 64 条，即 524,288 输入 tokens/update |
-| 初始化与恢复 | 新运行从随机初始化；--resume 恢复 model/optimizer/scheduler/每 rank RNG，计划必须一致 |
+- `training/configs/FLOPs_3e17.yaml`
+- `training/configs/FLOPs_1e18.yaml`
+- `training/configs/FLOPs_3e18.yaml`
+- `training/configs/FLOPs_1e19.yaml`
 
-训练参数优先级为显式命令行值、对应 YAML 值、内置回退值。`--micro-batch-size` /
-`--grad-accum-steps` 未传时读取 `training.micro_batch_size` /
-`training.gradient_accumulation_steps`，不再被启动器的 batch=1 覆盖。
-总步数和验证/保存间隔也读取 YAML；max_steps 为 null 时回退 20，验证/保存间隔缺失时回退 10。
-启动日志打印实际生效的参数，run-plan.json 保存实际 batch 和学习率。
+四档使用相同的 254,467,368 参数 OLMo Hybrid 模型：16 层、hidden size 896、
+FFN intermediate size 3584、7 个 attention/KV heads，block pattern 为
+`[gdn, gdn, gdn, attn]`。词表为 32768，上下文长度为 8192。
 
-先设置四档 `STEPS_3E17`、`STEPS_1E18`、`STEPS_3E18`、`STEPS_1E19` 为各自已核定的正整数步数。
-Hybrid 的版本化逐算子参考图已接入 `training/count_flops.py --auto-hybrid`，
-不能将稠密 OLMo3 的 563/676 步作为 Hybrid 预算依据。
-用 32768 词表、8192 上下文、两张卡、每卡 batch=1、累积 32 次，
-并将 exp/sqrt/div/log 的逻辑开销显式设为 1 时，1e19 预算对应 3068 个更新，
-计划 FLOPs 为 9.998993460604875e18、输入 tokens 为 1,608,515,584。
-这是本地参考口径的计划；特殊函数开销不是主办方已明确给出的规定，最终按实际日志核算。
-在宿主机运行以下命令可重新生成计划（更改 GPU 数量或 batch 后须重算）：
+两卡基准配置为每卡 `micro_batch_size=1`、`gradient_accumulation_steps=32`，
+即每次 optimizer update 处理 524,288 tokens。优化器为 AdamW，peak LR 为 2.83e-4，
+warmup 20 步；随后保持 constant LR，在最后约 16.8% 的更新中线性降至 0。
+该比例来自 250M 的 B3 cooldown 实验，四档按总步数等比例取整。
+
+| 配置 | 目标 FLOPs | 计划 FLOPs | max_steps | 计划 tokens | cooldown_steps |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| FLOPs_3e17 | 300,000,000,000,000,000 | 299,638,724,787,417,600 | 325 | 170,393,600 | 55 |
+| FLOPs_1e18 | 1,000,000,000,000,000,000 | 999,410,392,829,417,472 | 1,084 | 568,328,192 | 182 |
+| FLOPs_3e18 | 3,000,000,000,000,000,000 | 2,999,153,143,795,290,624 | 3,253 | 1,705,508,864 | 547 |
+| FLOPs_1e19 | 10,000,000,000,000,000,000 | 9,999,635,720,136,403,968 | 10,846 | 5,686,427,648 | 1,823 |
+
+以上计划使用 Hybrid 逐算子口径
+`1,800,713,490,309 / 1,024 FLOPs/token`。计划 FLOPs 均不超过对应预算，
+且与目标差异小于 1%。可在仓库根目录静态检查四档配置：
 
 ```bash
-docker run --rm --network none --user "$(id -u):$(id -g)" \
-  --env HOME=/tmp --env PYTHONDONTWRITEBYTECODE=1 \
-  --mount "type=bind,src=$PWD,dst=/repo" --workdir /repo \
-  scicomp26:submission-env-hybrid-v3 python training/count_flops.py \
-  --auto-hybrid --scalar-op-cost 1 --plan-only --target-flops 1e19 \
-  --model-config training/configs/FLOPs_1e19.yaml --padded-vocab-size 32768 \
-  --micro-batch-size 1 --data-parallel-size 2 --grad-accum-steps 32 \
-  --write-operator-ledger training/logs/FLOPs_1e19/hybrid_operator_ledger.json \
-  --output training/logs/FLOPs_1e19/hybrid_flops_plan.json
+python training/validate_250m_configs.py
 ```
 
-当前启动器只传递手动 `--steps`，不接受 `--target-flops` 自动预算。
-W&B 登录入口为 `bash training/src/login_wandb.sh scicomp26:submission-env-hybrid-v3`。
+训练入口会直接读取 YAML 内的模型、步数、batch、学习率、warmup、验证和保存间隔。
+使用已生成的 packed-token 数据时，只需替换档位、GPU 和数据目录：
 
 ```bash
+BUDGET=1e19
 bash training/train.sh \
-  --image scicomp26:submission-env-v1 \
-  --config training/configs/FLOPs_3e17.yaml \
-  --stage stage1 --gpus 1,2 \
-  --data-dir /home/pretrain10/dolma3_official/extracted \
-  --data-format jsonl \
-  --tokenizer-dir /home/pretrain10/dolma3_official/tokenizer_v1_bpe32k \
-  --micro-batch-size 1 --grad-accum-steps 128 \
-  --steps "$STEPS_3E17" --save-every 10 --eval-every 10 \
-  --run-name olmo_hybrid_1b-3e17 \
+  --image scicomp26:submission-env-hybrid-v3 \
+  --config "training/configs/FLOPs_${BUDGET}.yaml" \
+  --stage stage1 --gpus 0,1 \
+  --data-dir /path/to/packed-token-data \
+  --data-format packed \
+  --run-name "olmo_hybrid_250m_${BUDGET}" \
   --wandb --wandb-entity echo-lab --wandb-project scicomp26
 ```
 
-```bash
-bash training/train.sh \
-  --image scicomp26:submission-env-v1 \
-  --config training/configs/FLOPs_1e18.yaml \
-  --stage stage1 --gpus 1,2 \
-  --data-dir /home/pretrain10/dolma3_official/extracted \
-  --data-format jsonl \
-  --tokenizer-dir /home/pretrain10/dolma3_official/tokenizer_v1_bpe32k \
-  --micro-batch-size 1 --grad-accum-steps 128 \
-  --steps "$STEPS_1E18" --save-every 10 --eval-every 10 \
-  --run-name olmo_hybrid_1b-1e18 \
-  --wandb --wandb-entity echo-lab --wandb-project scicomp26
-```
+不要在上述命令中覆盖 `--steps`、`--micro-batch-size`、`--grad-accum-steps`、
+`--learning-rate` 或 `--warmup-steps`，除非同时重新核算该档预算。四张 GPU 训练若要保持
+相同的 524,288 tokens/update，可将梯度累积改为 16；此时 checkpoint 不能与两卡计划直接
+按完整 `run-plan.json` 恢复。
 
-```bash
-bash training/train.sh \
-  --image scicomp26:submission-env-v1 \
-  --config training/configs/FLOPs_3e18.yaml \
-  --stage stage1 --gpus 1,2 \
-  --data-dir /home/pretrain10/dolma3_official/extracted \
-  --data-format jsonl \
-  --tokenizer-dir /home/pretrain10/dolma3_official/tokenizer_v1_bpe32k \
-  --micro-batch-size 1 --grad-accum-steps 128 \
-  --steps "$STEPS_3E18" --save-every 10 --eval-every 10 \
-  --run-name olmo_hybrid_1b-3e18 \
-  --wandb --wandb-entity echo-lab --wandb-project scicomp26
-```
+从原始 JSONL 启动时增加 tokenizer 路径，启动器会先生成或复用缓存：
 
 ```bash
 bash training/train.sh \
   --image scicomp26:submission-env-hybrid-v3 \
   --config training/configs/FLOPs_1e19.yaml \
   --stage stage1 --gpus 0,1 \
-  --data-dir ../data/extracted-token-cache/5b61d12201f32c1cdbeb083c69947f7b4149bd4a000f5bd77257f968cbd9164e \
-  --data-format packed \
-  --steps 3068 \
-  --save-every 100 --eval-every 100 \
+  --data-dir /home/pretrain10/dolma3_official/extracted \
+  --data-format jsonl \
+  --tokenizer-dir /home/pretrain10/dolma3_official/tokenizer_v1_bpe32k \
+  --run-name olmo_hybrid_250m_1e19 \
   --wandb --wandb-entity echo-lab --wandb-project scicomp26
 ```
 
-启动器实际执行以下 Docker 挂载方式；其中 `CACHE_PATH` 为已发布的指纹缓存目录，
-`RUN_DIR` 为新建输出目录，`CONFIG_PATH` 为四档配置之一，`STEPS` 为人工核定步数：
-
-```bash
-docker run --rm --pull=never --runtime=nvidia --gpus '"device=1,2"' --shm-size 64g \
-  --user "$(id -u):$(id -g)" --env HOME=/tmp --env PYTHONDONTWRITEBYTECODE=1 \
-  --env OMP_NUM_THREADS=1 --workdir /workspace/comp/scicomp26 \
-  --mount "type=bind,src=$PWD,dst=/workspace/comp/scicomp26,readonly" \
-  --mount "type=bind,src=$CACHE_PATH,dst=/data,readonly" \
-  --mount "type=bind,src=$RUN_DIR,dst=/runs" \
-  scicomp26:submission-env-v1 torchrun --standalone --nnodes=1 --nproc-per-node=2 \
-  training/src/train_ddp.py --config "$CONFIG_PATH" --data-dir /data --output-dir /runs \
-  --max-steps "$STEPS" --micro-batch-size 1 --grad-accum-steps 128 \
-  --learning-rate 2e-4 --warmup-steps 0 --eval-every 10 --save-every 10
-```
-
-启用 W&B 时，启动器增加 host 网络、代理变量、凭据只读挂载及 `/runs` 日志环境。
-恢复使用新的 `--run-name`，并追加 `--resume <原运行目录>/step-<n>.pt`，其余训练计划保持一致。
-`--dry-run` 只打印预处理和训练命令，不生成缓存或启动训练。
+未传 `--resume` 或 `--branch-from` 时从随机初始化开始。中断后使用相同配置、GPU 数、
+数据 metadata 和训练参数，并传 `--resume <checkpoint>` 恢复。`--dry-run` 只打印预处理与
+训练命令。GPU 运行验证与完整训练由 infra 组执行。
 
 ## 4. 训练记录与 FLOPs 核算
 
