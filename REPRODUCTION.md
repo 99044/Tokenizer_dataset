@@ -1,7 +1,7 @@
 # 环境与运行说明
 
-本文对应 `olmo_hybrid_250m`，工作目录为仓库根目录。目录与 `infra` 对齐，
-模型实现、训练循环和四档模型配置保留本分支版本；不复用 OLMo3 的历史训练记录。
+本文对应 2026-10-17 提交分支 `submission_20261017_soap`，工作目录为仓库根目录。
+四档采用同一 OLMo Hybrid 缩放家族，并分别使用 110M、190M、250M、330M 模型。
 
 ## 1. 环境与镜像
 
@@ -93,72 +93,70 @@ GDN 文档边界重置仍需后续数据接口适配。
 
 四档配置文件名保持提交规范不变：
 
-- `training/configs/FLOPs_3e17.yaml`
-- `training/configs/FLOPs_1e18.yaml`
-- `training/configs/FLOPs_3e18.yaml`
-- `training/configs/FLOPs_1e19.yaml`
+- `training/configs/FLOPs_3e17.yaml`：110M
+- `training/configs/FLOPs_1e18.yaml`：190M
+- `training/configs/FLOPs_3e18.yaml`：250M
+- `training/configs/FLOPs_1e19.yaml`：330M
 
-四档使用相同的 254,467,368 参数 OLMo Hybrid 模型：16 层、hidden size 896、
-FFN intermediate size 3584、7 个 attention/KV heads，block pattern 为
-`[gdn, gdn, gdn, attn]`。词表为 32768，上下文长度为 8192。
+四档均使用 `[gdn, gdn, gdn, attn]` OLMo Hybrid、32768 词表和 8192 上下文。
+训练固定使用四张 GPU，每卡 `micro_batch_size=1`、梯度累积 16 次：
 
-两卡基准配置为每卡 `micro_batch_size=1`、`gradient_accumulation_steps=32`，
-即每次 optimizer update 处理 524,288 tokens。优化器为 AdamW，peak LR 为 2.83e-4，
-warmup 20 步；随后保持 constant LR，在最后约 16.8% 的更新中线性降至 0。
-该比例来自 250M 的 B3 cooldown 实验，四档按总步数等比例取整。
-
-| 配置 | 目标 FLOPs | 计划 FLOPs | max_steps | 计划 tokens | cooldown_steps |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| FLOPs_3e17 | 300,000,000,000,000,000 | 299,638,724,787,417,600 | 325 | 170,393,600 | 55 |
-| FLOPs_1e18 | 1,000,000,000,000,000,000 | 999,410,392,829,417,472 | 1,084 | 568,328,192 | 182 |
-| FLOPs_3e18 | 3,000,000,000,000,000,000 | 2,999,153,143,795,290,624 | 3,253 | 1,705,508,864 | 547 |
-| FLOPs_1e19 | 10,000,000,000,000,000,000 | 9,999,635,720,136,403,968 | 10,846 | 5,686,427,648 | 1,823 |
-
-以上计划使用 Hybrid 逐算子口径
-`1,800,713,490,309 / 1,024 FLOPs/token`。计划 FLOPs 均不超过对应预算，
-且与目标差异小于 1%。可在仓库根目录静态检查四档配置：
-
-```bash
-python training/validate_250m_configs.py
+```text
+4 × 1 × 16 × 8192 = 524,288 tokens/update
 ```
 
-训练入口会直接读取 YAML 内的模型、步数、batch、学习率、warmup、验证和保存间隔。
-使用已生成的 packed-token 数据时，只需替换档位、GPU 和数据目录：
+优化器统一为 SOAP：peak LR `0.003`、betas `(0.95, 0.95)`、eps `1e-8`、
+weight decay `0.1`、precondition frequency `10`、max precondition dimension `1024`。
+训练 warmup 20 步，最后约 16.8% 的更新线性 cooldown 到 0。
+
+| 配置 | 实际参数量 | 目标 FLOPs | 计划 FLOPs | max_steps | 计划 tokens | cooldown |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| FLOPs_3e17 | 107,135,898 | 300,000,000,000,000,000 | 299,965,518,274,982,144 | 746 | 391,118,848 | 125 |
+| FLOPs_1e18 | 190,571,664 | 1,000,000,000,000,000,000 | 999,831,907,666,285,568 | 1,421 | 745,013,248 | 239 |
+| FLOPs_3e18 | 254,467,368 | 3,000,000,000,000,000,000 | 2,999,153,143,795,290,624 | 3,253 | 1,705,508,864 | 547 |
+| FLOPs_1e19 | 327,544,256 | 10,000,000,000,000,000,000 | 9,999,003,920,043,704,320 | 8,552 | 4,483,710,976 | 1,438 |
+
+每档均在 10%–90% 的九个进度节点和 100% 最终节点保存 checkpoint，共 10 个；
+相同节点执行验证，最终验证使用 64 batches。最终 checkpoint 与 BPB 结果确认可用后，
+可删除该 run 的 10%–90% checkpoint 释放空间。
+
+使用完整 Hybrid 逐算子 FLOPs 口径检查架构、参数量、四卡 batch、SOAP、预算和
+checkpoint 节点：
+
+```bash
+python training/validate_submission_20261017_configs.py
+```
+
+使用已有 packed-token 数据运行单档：
 
 ```bash
 BUDGET=1e19
 bash training/train.sh \
   --image scicomp26:submission-env-hybrid-v3 \
   --config "training/configs/FLOPs_${BUDGET}.yaml" \
-  --stage stage1 --gpus 0,1 \
-  --data-dir /path/to/packed-token-data \
-  --data-format packed \
-  --run-name "olmo_hybrid_250m_${BUDGET}" \
+  --stage stage1 --gpus 0,1,2,3 \
+  --data-dir /path/to/packed-token-data --data-format packed \
+  --run-name "submission_20261017_${BUDGET}" \
   --wandb --wandb-entity echo-lab --wandb-project scicomp26
 ```
 
-不要在上述命令中覆盖 `--steps`、`--micro-batch-size`、`--grad-accum-steps`、
-`--learning-rate` 或 `--warmup-steps`，除非同时重新核算该档预算。四张 GPU 训练若要保持
-相同的 524,288 tokens/update，可将梯度累积改为 16；此时 checkpoint 不能与两卡计划直接
-按完整 `run-plan.json` 恢复。
+不要覆盖 YAML 中的 GPU batch、步数、学习率、warmup 或保存间隔，否则预算与 10% 节点
+将不再匹配。未传 `--resume` 时从随机初始化开始；中断恢复必须使用同一配置、四张 GPU、
+相同数据 metadata，并传 `--resume <checkpoint>`。
 
-从原始 JSONL 启动时增加 tokenizer 路径，启动器会先生成或复用缓存：
+从原始 JSONL 启动时增加 tokenizer 路径，启动器会生成或复用 token cache：
 
 ```bash
 bash training/train.sh \
   --image scicomp26:submission-env-hybrid-v3 \
   --config training/configs/FLOPs_1e19.yaml \
-  --stage stage1 --gpus 0,1 \
+  --stage stage1 --gpus 0,1,2,3 \
   --data-dir /home/pretrain10/dolma3_official/extracted \
   --data-format jsonl \
   --tokenizer-dir /home/pretrain10/dolma3_official/tokenizer_v1_bpe32k \
-  --run-name olmo_hybrid_250m_1e19 \
+  --run-name submission_20261017_1e19 \
   --wandb --wandb-entity echo-lab --wandb-project scicomp26
 ```
-
-未传 `--resume` 或 `--branch-from` 时从随机初始化开始。中断后使用相同配置、GPU 数、
-数据 metadata 和训练参数，并传 `--resume <checkpoint>` 恢复。`--dry-run` 只打印预处理与
-训练命令。GPU 运行验证与完整训练由 infra 组执行。
 
 ## 4. 训练记录与 FLOPs 核算
 

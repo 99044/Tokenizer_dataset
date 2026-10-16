@@ -1,26 +1,27 @@
-# OLMo Hybrid 250M fixed-architecture training config.
 run:
-  name: olmo_hybrid_250m_3e17
+  name: olmo_hybrid_110m_3e17_soap
   seed: 42
 scaling:
   family: olmo_hybrid_v1
-  nominal_size: 250m
-  expected_total_parameters: 254467368
+  nominal_size: 110m
+  expected_total_parameters: 107135898
+  parameter_count_vocab_size: 32768
   tokens_per_update: 524288
+  flops_accounting: complete Hybrid operator ledger with scalar-op-cost 1
 budget:
   total_training_flops: 300000000000000000
-  planned_training_flops: 299638724787417600
-  planned_training_tokens: 170393600
-  flops_per_token_numerator: 1800713490309
-  flops_per_token_denominator: 1024
+  planned_training_flops: 299965518274982144
+  planned_training_tokens: 391118848
+  flops_per_token_numerator: 3141394921613
+  flops_per_token_denominator: 4096
 model:
   type: olmo_hybrid_scaling
-  num_layers: 16
-  hidden_size: 896
-  num_attention_heads: 7
-  num_key_value_heads: 7
+  num_layers: 12
+  hidden_size: 640
+  num_attention_heads: 5
+  num_key_value_heads: 5
   attention_head_dim: 128
-  intermediate_size: 3584
+  intermediate_size: 2560
   activation: swiglu
   normalization: rmsnorm
   normalization_style: reordered_norm
@@ -40,8 +41,8 @@ model:
   - gdn
   - gdn
   - attn
-  gdn_num_heads: 7
-  gdn_num_value_heads: 7
+  gdn_num_heads: 5
+  gdn_num_value_heads: 5
   gdn_head_dim: 96
   gdn_value_expand: 2.0
   gdn_allow_neg_eigval: true
@@ -55,22 +56,24 @@ model:
   dropout: 0.0
 training:
   dtype: bfloat16
-  max_steps: 325
+  max_steps: 746
   micro_batch_size: 1
-  gradient_accumulation_steps: 32
+  gradient_accumulation_steps: 16
   gradient_checkpointing: false
 optimizer:
-  name: adamw
-  learning_rate: 0.000283
+  name: soap
+  learning_rate: 0.003
   betas:
-  - 0.9
+  - 0.95
   - 0.95
   eps: 1.0e-08
   weight_decay: 0.1
+  precondition_frequency: 10
+  max_precond_dim: 1024
 scheduler:
   name: linear_cooldown
   warmup_steps: 20
-  cooldown_steps: 55
+  cooldown_steps: 125
   final_lr_ratio: 0.0
 data:
   tokenizer_path: null
@@ -82,9 +85,34 @@ logging:
   backend: wandb
   entity: echo-lab
   project: scicomp26
-  log_every_steps: 10
-  eval_every_steps: 100
+  log_every_steps: 5
+  eval_every_steps: 746
   eval_batches: 8
-  checkpoint_every_steps: 100
+  final_eval_batches: 64
+  checkpoint_every_steps: 746
+  eval_steps:
+  - 75
+  - 149
+  - 224
+  - 298
+  - 373
+  - 448
+  - 522
+  - 597
+  - 671
+  checkpoint_steps:
+  - 75
+  - 149
+  - 224
+  - 298
+  - 373
+  - 448
+  - 522
+  - 597
+  - 671
 output:
-  directory: runs/olmo_hybrid_250m_3e17
+  directory: runs/submission_20261017/3e17_110m_soap
+submission:
+  target_date: '2026-10-17'
+  budget_tier: 3e17
+  data_parallel_size: 4

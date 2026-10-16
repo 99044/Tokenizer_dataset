@@ -79,7 +79,9 @@ def main():
         checkpoint_step = int(checkpoint["step"])
         plan = checkpoint["plan"]
         settings = plan["settings"]
-        learning_rate = float(checkpoint["optimizer"]["param_groups"][0]["lr"])
+        optimizer_settings = settings["optimizer"]
+        peak_learning_rate = float(optimizer_settings["learning_rate"])
+        checkpoint_learning_rate = float(checkpoint["optimizer"]["param_groups"][0]["lr"])
         if settings["model"]["type"] not in {"olmo_hybrid_1b", "olmo_hybrid_scaling"}:
             raise ValueError("native BPB evaluation supports the OLMo Hybrid family")
         vocab_size = data_vocab_size(plan["data"])
@@ -128,10 +130,16 @@ def main():
             * sequence_length
         )
         training_tokens = checkpoint_step * tokens_per_update
-        full_run_flops = int(settings["budget"]["total_training_flops"])
-        flops_at_checkpoint = Fraction(full_run_flops, int(plan["max_steps"])) * checkpoint_step
-        if flops_at_checkpoint.denominator != 1:
-            raise ValueError("checkpoint FLOPs are not integral under the stored run plan")
+        budget = settings.get("budget")
+        flops_at_checkpoint = None
+        if isinstance(budget, dict) and budget.get("total_training_flops") is not None:
+            full_run_flops = int(
+                budget.get("planned_training_flops", budget["total_training_flops"])
+            )
+            checkpoint_flops = Fraction(full_run_flops, int(plan["max_steps"])) * checkpoint_step
+            if checkpoint_flops.denominator != 1:
+                raise ValueError("checkpoint FLOPs are not integral under the stored run plan")
+            flops_at_checkpoint = checkpoint_flops.numerator
         del checkpoint
 
         num_sequences = math.ceil((len(tokens) - 1) / sequence_length)
@@ -188,8 +196,11 @@ def main():
                 "N_total": parameters,
                 "N_nonembed": nonembedding_parameters,
                 "D": training_tokens,
-                "FLOPs": flops_at_checkpoint.numerator,
-                "learning_rate": learning_rate,
+                "FLOPs": flops_at_checkpoint,
+                "optimizer": optimizer_settings["name"],
+                "learning_rate": peak_learning_rate,
+                "checkpoint_learning_rate": checkpoint_learning_rate,
+                "scalar_learning_rate": optimizer_settings.get("scalar_learning_rate"),
                 "schedule": settings["scheduler"]["name"],
                 "seed": settings["run"]["seed"],
                 "sequence_length": sequence_length,

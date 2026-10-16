@@ -18,6 +18,7 @@ import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from model_config import build_model_config, count_parameters, tie_output_weights
+from optimizer_factory import build_optimizer
 from packed_token_sampler import PackedTokenSampler
 from training_options import resolve_training_options
 
@@ -167,10 +168,10 @@ def main():
         model = config.build(init_device='cpu')
         model.init_weights(max_seq_len=context_length, device=device)
         tie_output_weights(model)
-        optimizer = torch.optim.AdamW(
-            model.parameters(), lr=args.learning_rate,
-            betas=tuple(settings['optimizer']['betas']),
-            eps=settings['optimizer']['eps'], weight_decay=settings['optimizer']['weight_decay'],
+        optimizer, optimizer_report = build_optimizer(
+            model,
+            settings,
+            primary_learning_rate=args.learning_rate,
         )
 
         scheduler_settings = settings['scheduler']
@@ -259,6 +260,14 @@ def main():
         validation = PackedTokenSampler(args.data_dir / 'validation.npy', context_length, vocab_size, seed + rank, metadata)
         global_batch = world * args.micro_batch_size * args.grad_accum_steps
         tokens_per_step = global_batch * context_length
+        expected_tokens_per_step = settings.get('experiment', {}).get(
+            'tokens_per_update', settings.get('scaling', {}).get('tokens_per_update')
+        )
+        if expected_tokens_per_step is not None and tokens_per_step != expected_tokens_per_step:
+            raise ValueError(
+                f'实际 tokens/update={tokens_per_step}，配置要求 {expected_tokens_per_step}；'
+                '请检查 GPU 数、micro batch 和梯度累积步数'
+            )
         eval_steps = configured_steps(settings, 'eval_steps')
         checkpoint_steps = configured_steps(settings, 'checkpoint_steps')
         for label, steps in [('eval_steps', eval_steps), ('checkpoint_steps', checkpoint_steps)]:
@@ -268,6 +277,9 @@ def main():
         if rank == 0:
             args.output_dir.mkdir(parents=True, exist_ok=True)
             (args.output_dir / 'run-plan.json').write_text(json.dumps(plan, indent=2, ensure_ascii=False))
+            (args.output_dir / 'optimizer-groups.json').write_text(
+                json.dumps(optimizer_report, indent=2, ensure_ascii=False) + '\n'
+            )
             print(f'resolved training options: micro_batch_size={args.micro_batch_size} '
                   f'grad_accum_steps={args.grad_accum_steps} learning_rate={args.learning_rate} '
                   f'warmup_steps={args.warmup_steps} max_steps={args.max_steps} '
@@ -318,6 +330,7 @@ def main():
             optimizer.zero_grad(set_to_none=True)
             local_loss = torch.zeros((), device=device)
             used_lr = optimizer.param_groups[0]['lr']
+            used_group_lrs = [group['lr'] for group in optimizer.param_groups]
             for micro_step in range(args.grad_accum_steps):
                 sync = micro_step == args.grad_accum_steps - 1
                 with nullcontext() if sync else ddp.no_sync():
@@ -333,22 +346,37 @@ def main():
             optimizer.step()
             scheduler.step()
             dist.all_reduce(local_loss)
-            # Reading the CUDA loss synchronizes this step before timing it.
             mean_loss = (local_loss / world).item()
+            # Dion may use auxiliary CUDA streams. Synchronize explicitly so the
+            # optimizer calibration measures the complete training update.
+            torch.cuda.synchronize(device)
             step_seconds = time.perf_counter() - step_started
             metrics = {
                 'step': step, 'train/loss': mean_loss, 'lr': used_lr,
                 'train/tokens': step * tokens_per_step,
                 'train/step_seconds': step_seconds,
                 'train/tokens_per_second': tokens_per_step / step_seconds,
+                'train/grad_norm': grad_norm.item(),
+                'system/max_memory_allocated_bytes': torch.cuda.max_memory_allocated(device),
+                'system/max_memory_reserved_bytes': torch.cuda.max_memory_reserved(device),
             }
+            for index, group in enumerate(optimizer_report['groups']):
+                metrics[f"lr/{group['name']}"] = used_group_lrs[index]
             if step % args.eval_every == 0 or step in eval_steps or step == stop_step:
+                eval_batches = args.eval_batches
+                if step == args.max_steps:
+                    eval_batches = int(
+                        settings.get('logging', {}).get('final_eval_batches', eval_batches)
+                    )
+                    if eval_batches <= 0:
+                        raise ValueError('logging.final_eval_batches 必须为正整数')
                 validation_loss = evaluate(
-                    model, validation, args.micro_batch_size, args.eval_batches,
+                    model, validation, args.micro_batch_size, eval_batches,
                     vocab_size, device, seed + 100000 + rank,
                 )
                 metrics['validation/loss'] = validation_loss
                 metrics['validation/token_nll'] = validation_loss
+                metrics['validation/batches'] = eval_batches
             metrics['elapsed_seconds'] = time.perf_counter() - run_started
             if rank == 0:
                 print(json.dumps(metrics), flush=True)

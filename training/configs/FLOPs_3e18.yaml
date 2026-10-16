@@ -1,12 +1,13 @@
-# OLMo Hybrid 250M fixed-architecture training config.
 run:
-  name: olmo_hybrid_250m_3e18
+  name: olmo_hybrid_250m_3e18_soap
   seed: 42
 scaling:
   family: olmo_hybrid_v1
   nominal_size: 250m
   expected_total_parameters: 254467368
+  parameter_count_vocab_size: 32768
   tokens_per_update: 524288
+  flops_accounting: complete Hybrid operator ledger with scalar-op-cost 1
 budget:
   total_training_flops: 3000000000000000000
   planned_training_flops: 2999153143795290624
@@ -57,16 +58,18 @@ training:
   dtype: bfloat16
   max_steps: 3253
   micro_batch_size: 1
-  gradient_accumulation_steps: 32
+  gradient_accumulation_steps: 16
   gradient_checkpointing: false
 optimizer:
-  name: adamw
-  learning_rate: 0.000283
+  name: soap
+  learning_rate: 0.003
   betas:
-  - 0.9
+  - 0.95
   - 0.95
   eps: 1.0e-08
   weight_decay: 0.1
+  precondition_frequency: 10
+  max_precond_dim: 1024
 scheduler:
   name: linear_cooldown
   warmup_steps: 20
@@ -82,9 +85,34 @@ logging:
   backend: wandb
   entity: echo-lab
   project: scicomp26
-  log_every_steps: 10
-  eval_every_steps: 100
+  log_every_steps: 5
+  eval_every_steps: 3253
   eval_batches: 8
-  checkpoint_every_steps: 100
+  final_eval_batches: 64
+  checkpoint_every_steps: 3253
+  eval_steps:
+  - 325
+  - 651
+  - 976
+  - 1301
+  - 1626
+  - 1952
+  - 2277
+  - 2602
+  - 2928
+  checkpoint_steps:
+  - 325
+  - 651
+  - 976
+  - 1301
+  - 1626
+  - 1952
+  - 2277
+  - 2602
+  - 2928
 output:
-  directory: runs/olmo_hybrid_250m_3e18
+  directory: runs/submission_20261017/3e18_250m_soap
+submission:
+  target_date: '2026-10-17'
+  budget_tier: 3e18
+  data_parallel_size: 4
