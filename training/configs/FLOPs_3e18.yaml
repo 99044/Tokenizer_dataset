@@ -1,27 +1,27 @@
 run:
-  name: olmo_hybrid_250m_3e18_soap
+  name: olmo_hybrid_330m_3e18_soap
   seed: 42
 scaling:
   family: olmo_hybrid_v1
-  nominal_size: 250m
-  expected_total_parameters: 254467368
+  nominal_size: 330m
+  expected_total_parameters: 327544256
   parameter_count_vocab_size: 32768
   tokens_per_update: 524288
   flops_accounting: complete Hybrid operator ledger with scalar-op-cost 1
 budget:
   total_training_flops: 3000000000000000000
-  planned_training_flops: 2999153143795290624
-  planned_training_tokens: 1705508864
-  flops_per_token_numerator: 1800713490309
-  flops_per_token_denominator: 1024
+  planned_training_flops: 2998999655625830400
+  planned_training_tokens: 1344798720
+  flops_per_token_numerator: 285449376335
+  flops_per_token_denominator: 128
 model:
   type: olmo_hybrid_scaling
   num_layers: 16
-  hidden_size: 896
-  num_attention_heads: 7
-  num_key_value_heads: 7
+  hidden_size: 1024
+  num_attention_heads: 8
+  num_key_value_heads: 8
   attention_head_dim: 128
-  intermediate_size: 3584
+  intermediate_size: 4096
   activation: swiglu
   normalization: rmsnorm
   normalization_style: reordered_norm
@@ -41,8 +41,8 @@ model:
   - gdn
   - gdn
   - attn
-  gdn_num_heads: 7
-  gdn_num_value_heads: 7
+  gdn_num_heads: 8
+  gdn_num_value_heads: 8
   gdn_head_dim: 96
   gdn_value_expand: 2.0
   gdn_allow_neg_eigval: true
@@ -56,7 +56,7 @@ model:
   dropout: 0.0
 training:
   dtype: bfloat16
-  max_steps: 3253
+  max_steps: 2565
   micro_batch_size: 1
   gradient_accumulation_steps: 16
   gradient_checkpointing: false
@@ -73,7 +73,7 @@ optimizer:
 scheduler:
   name: linear_cooldown
   warmup_steps: 20
-  cooldown_steps: 547
+  cooldown_steps: 431
   final_lr_ratio: 0.0
 data:
   tokenizer_path: null
@@ -86,33 +86,33 @@ logging:
   entity: echo-lab
   project: scicomp26
   log_every_steps: 5
-  eval_every_steps: 3253
+  eval_every_steps: 2565
   eval_batches: 8
   final_eval_batches: 64
-  checkpoint_every_steps: 3253
+  checkpoint_every_steps: 2565
   eval_steps:
-  - 325
-  - 651
-  - 976
-  - 1301
-  - 1626
-  - 1952
-  - 2277
-  - 2602
-  - 2928
+  - 256
+  - 513
+  - 770
+  - 1026
+  - 1282
+  - 1539
+  - 1796
+  - 2052
+  - 2308
   checkpoint_steps:
-  - 325
-  - 651
-  - 976
-  - 1301
-  - 1626
-  - 1952
-  - 2277
-  - 2602
-  - 2928
+  - 256
+  - 513
+  - 770
+  - 1026
+  - 1282
+  - 1539
+  - 1796
+  - 2052
+  - 2308
 output:
-  directory: runs/submission_20261017/3e18_250m_soap
+  directory: runs/submission_20261025/3e18_330m_soap
 submission:
-  target_date: '2026-10-17'
+  target_date: '2026-10-25'
   budget_tier: 3e18
   data_parallel_size: 4

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the four 2026-10-17 SOAP submission configs."""
+"""Validate the four 2026-10-25 SOAP submission configs."""
 
 from __future__ import annotations
 
@@ -19,24 +19,24 @@ from src.hybrid_flops import complete_hybrid_ledger, expected_parameter_count  #
 
 EXPECTED = {
     "FLOPs_3e17.yaml": {
-        "tier": "3e17", "size": "110m", "budget": 300_000_000_000_000_000,
-        "parameters": 107_135_898, "layers": 12, "hidden": 640, "heads": 5,
-        "intermediate": 2560,
-    },
-    "FLOPs_1e18.yaml": {
-        "tier": "1e18", "size": "190m", "budget": 1_000_000_000_000_000_000,
-        "parameters": 190_571_664, "layers": 16, "hidden": 768, "heads": 6,
-        "intermediate": 3072,
-    },
-    "FLOPs_3e18.yaml": {
-        "tier": "3e18", "size": "250m", "budget": 3_000_000_000_000_000_000,
-        "parameters": 254_467_368, "layers": 16, "hidden": 896, "heads": 7,
-        "intermediate": 3584,
-    },
-    "FLOPs_1e19.yaml": {
-        "tier": "1e19", "size": "330m", "budget": 10_000_000_000_000_000_000,
+        "tier": "3e17", "size": "330m", "budget": 300_000_000_000_000_000,
         "parameters": 327_544_256, "layers": 16, "hidden": 1024, "heads": 8,
         "intermediate": 4096,
+    },
+    "FLOPs_1e18.yaml": {
+        "tier": "1e18", "size": "330m", "budget": 1_000_000_000_000_000_000,
+        "parameters": 327_544_256, "layers": 16, "hidden": 1024, "heads": 8,
+        "intermediate": 4096,
+    },
+    "FLOPs_3e18.yaml": {
+        "tier": "3e18", "size": "330m", "budget": 3_000_000_000_000_000_000,
+        "parameters": 327_544_256, "layers": 16, "hidden": 1024, "heads": 8,
+        "intermediate": 4096,
+    },
+    "FLOPs_1e19.yaml": {
+        "tier": "1e19", "size": "500m", "budget": 10_000_000_000_000_000_000,
+        "parameters": 502_815_438, "layers": 20, "hidden": 1152, "heads": 9,
+        "intermediate": 4608,
     },
 }
 
@@ -56,7 +56,7 @@ def validate(path: Path, expected: dict) -> dict:
     scheduler = settings["scheduler"]
     logging = settings["logging"]
 
-    require(path, "submission.target_date", settings["submission"]["target_date"], "2026-10-17")
+    require(path, "submission.target_date", settings["submission"]["target_date"], "2026-10-25")
     require(path, "submission.budget_tier", settings["submission"]["budget_tier"], expected["tier"])
     require(path, "submission.data_parallel_size", settings["submission"]["data_parallel_size"], 4)
     require(path, "scaling.nominal_size", scaling["nominal_size"], expected["size"])

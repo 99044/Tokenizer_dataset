@@ -1,7 +1,7 @@
 # 环境与运行说明
 
-本文对应 2026-10-17 提交分支 `submission_20261017_soap`，工作目录为仓库根目录。
-四档采用同一 OLMo Hybrid 缩放家族，并分别使用 110M、190M、250M、330M 模型。
+本文对应 2026-10-25 提交分支 `submission_20261025`，工作目录为仓库根目录。
+四档采用同一 OLMo Hybrid 缩放家族，并分别使用 330M、330M、330M、500M 模型。
 
 ## 1. 环境与镜像
 
@@ -93,10 +93,10 @@ GDN 文档边界重置仍需后续数据接口适配。
 
 四档配置文件名保持提交规范不变：
 
-- `training/configs/FLOPs_3e17.yaml`：110M
-- `training/configs/FLOPs_1e18.yaml`：190M
-- `training/configs/FLOPs_3e18.yaml`：250M
-- `training/configs/FLOPs_1e19.yaml`：330M
+- `training/configs/FLOPs_3e17.yaml`：330M
+- `training/configs/FLOPs_1e18.yaml`：330M
+- `training/configs/FLOPs_3e18.yaml`：330M
+- `training/configs/FLOPs_1e19.yaml`：500M
 
 四档均使用 `[gdn, gdn, gdn, attn]` OLMo Hybrid、32768 词表和 8192 上下文。
 训练固定使用四张 GPU，每卡 `micro_batch_size=1`、梯度累积 16 次：
@@ -111,10 +111,10 @@ weight decay `0.1`、precondition frequency `10`、max precondition dimension `1
 
 | 配置 | 实际参数量 | 目标 FLOPs | 计划 FLOPs | max_steps | 计划 tokens | cooldown |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| FLOPs_3e17 | 107,135,898 | 300,000,000,000,000,000 | 299,965,518,274,982,144 | 746 | 391,118,848 | 125 |
-| FLOPs_1e18 | 190,571,664 | 1,000,000,000,000,000,000 | 999,831,907,666,285,568 | 1,421 | 745,013,248 | 239 |
-| FLOPs_3e18 | 254,467,368 | 3,000,000,000,000,000,000 | 2,999,153,143,795,290,624 | 3,253 | 1,705,508,864 | 547 |
-| FLOPs_1e19 | 327,544,256 | 10,000,000,000,000,000,000 | 9,999,003,920,043,704,320 | 8,552 | 4,483,710,976 | 1,438 |
+| FLOPs_3e17 | 327,544,256 | 300,000,000,000,000,000 | 299,315,365,239,848,960 | 256 | 134,217,728 | 43 |
+| FLOPs_1e18 | 327,544,256 | 1,000,000,000,000,000,000 | 999,666,551,875,276,800 | 855 | 448,266,240 | 144 |
+| FLOPs_3e18 | 327,544,256 | 3,000,000,000,000,000,000 | 2,998,999,655,625,830,400 | 2,565 | 1,344,798,720 | 431 |
+| FLOPs_1e19 | 502,815,438 | 10,000,000,000,000,000,000 | 9,998,938,904,868,544,128 | 5,627 | 2,950,168,576 | 946 |
 
 每档均在 10%–90% 的九个进度节点和 100% 最终节点保存 checkpoint，共 10 个；
 相同节点执行验证，最终验证使用 64 batches。最终 checkpoint 与 BPB 结果确认可用后，
@@ -124,7 +124,7 @@ weight decay `0.1`、precondition frequency `10`、max precondition dimension `1
 checkpoint 节点：
 
 ```bash
-python training/validate_submission_20261017_configs.py
+python training/validate_submission_20261025_configs.py
 ```
 
 使用已有 packed-token 数据运行单档：
@@ -136,7 +136,7 @@ bash training/train.sh \
   --config "training/configs/FLOPs_${BUDGET}.yaml" \
   --stage stage1 --gpus 0,1,2,3 \
   --data-dir /path/to/packed-token-data --data-format packed \
-  --run-name "submission_20261017_${BUDGET}" \
+  --run-name "submission_20261025_${BUDGET}" \
   --wandb --wandb-entity echo-lab --wandb-project scicomp26
 ```
 
@@ -154,7 +154,7 @@ bash training/train.sh \
   --data-dir /home/pretrain10/dolma3_official/extracted \
   --data-format jsonl \
   --tokenizer-dir /home/pretrain10/dolma3_official/tokenizer_v1_bpe32k \
-  --run-name submission_20261017_1e19 \
+  --run-name submission_20261025_1e19 \
   --wandb --wandb-entity echo-lab --wandb-project scicomp26
 ```
 
