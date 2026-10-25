@@ -18,6 +18,7 @@ import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from model_config import build_model_config, count_parameters, tie_output_weights
+from model_initialization import repair_zero_gdn_decay_rates
 from optimizer_factory import build_optimizer
 from packed_token_sampler import PackedTokenSampler
 from training_options import resolve_training_options
@@ -167,6 +168,7 @@ def main():
         config.init_seed = seed
         model = config.build(init_device='cpu')
         model.init_weights(max_seq_len=context_length, device=device)
+        initialization_repairs = repair_zero_gdn_decay_rates(model)
         tie_output_weights(model)
         optimizer, optimizer_report = build_optimizer(
             model,
@@ -276,6 +278,11 @@ def main():
                 raise ValueError(f'logging.{label} 不能超过 max_steps={args.max_steps}：{outside}')
         if rank == 0:
             args.output_dir.mkdir(parents=True, exist_ok=True)
+            (args.output_dir / 'initialization-repairs.json').write_text(
+                json.dumps(initialization_repairs, indent=2) + '\n'
+            )
+            if initialization_repairs:
+                print(f'GDN initialization repairs: {json.dumps(initialization_repairs)}', flush=True)
             (args.output_dir / 'run-plan.json').write_text(json.dumps(plan, indent=2, ensure_ascii=False))
             (args.output_dir / 'optimizer-groups.json').write_text(
                 json.dumps(optimizer_report, indent=2, ensure_ascii=False) + '\n'
@@ -408,4 +415,6 @@ def main():
 
 
 if __name__ == '__main__':
+    from diagnostic_hooks import install
+    install()
     main()

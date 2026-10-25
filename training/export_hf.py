@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export native OLMo3 checkpoints or repack HF models for offline loading."""
+"""Export native OLMo3/Hybrid checkpoints or repack HF models for offline loading."""
 
 import argparse
 import gc
@@ -39,7 +39,8 @@ def read_tokenizer(source, data):
     if len(tokenizer) != data['vocab_size']:
         raise ValueError('tokenizer vocabulary size differs from checkpoint')
     token_hash = sha256_file(source / 'tokenizer.json')
-    expected_hash = data.get('tokenizer_details', {}).get('tokenizer_json_sha256')
+    details = data.get('tokenizer_details') or data.get('tokenizer') or {}
+    expected_hash = details.get('tokenizer_json_sha256') if isinstance(details, dict) else None
     if expected_hash and token_hash != expected_hash:
         raise ValueError('tokenizer.json SHA-256 differs from checkpoint data metadata')
     if tokenizer.eos_token_id != data['eos_token_id']:
@@ -158,36 +159,52 @@ def load_offline_model(output, trust_remote_code=False):
 def export_checkpoint(args):
     import torch
     import yaml
-    from olmo_core.nn.hf import convert_state_to_hf, get_hf_config
     from transformers import AutoModelForCausalLM, GenerationConfig
 
     sys.path.insert(0, str(Path(__file__).resolve().parent / 'src'))
-    from model_config import build_model_config, tie_output_weights
 
     # The checkpoint is our own trusted torch.save artifact. mmap avoids reading
     # optimizer tensors while exporting model weights.
     checkpoint = torch.load(args.checkpoint, map_location='cpu', weights_only=False, mmap=True)
     plan = checkpoint['plan']
     settings = plan['settings']
-    if settings['model']['type'] != 'olmo3_1b':
-        raise ValueError('native export currently supports the shared OLMo3-1B architecture')
+    model_type = settings['model']['type']
+    hybrid = model_type in {'olmo_hybrid_scaling', 'olmo_hybrid_1b'}
+    if model_type != 'olmo3_1b' and not hybrid:
+        raise ValueError(f'unsupported native export architecture: {model_type}')
     tokenizer, token_record = read_tokenizer(args.tokenizer_dir, plan['data'])
     training_length = settings['model']['context_length']
     max_length = args.max_sequence_length or training_length
-    # Use the architecture saved with the weights, not the current training YAML.
-    with tempfile.TemporaryDirectory() as temporary:
-        config_path = Path(temporary) / 'checkpoint.yaml'
-        config_path.write_text(yaml.safe_dump(settings))
-        core_config, _, _ = build_model_config(config_path, len(tokenizer))
-    core = core_config.build(init_device='meta')
     native_state = checkpoint['model']
     if settings['model']['tie_word_embeddings']:
         embedding, projection = native_state['embeddings.weight'], native_state['lm_head.w_out.weight']
         if embedding.data_ptr() != projection.data_ptr() and not torch.equal(embedding, projection):
             raise ValueError('checkpoint declares tied embeddings but stores different weights')
-    core.load_state_dict(native_state, strict=True, assign=True)
-    tie_output_weights(core)
-    hf_config = get_hf_config(core)
+    if hybrid:
+        from hybrid_export import NativeHybridCPUReference, convert_hybrid_state, hybrid_hf_config
+
+        hf_config = hybrid_hf_config(settings, len(tokenizer))
+        convert_state_to_hf = convert_hybrid_state
+    # CPU Hybrid checks use an independent token recurrence. Native FLA imports
+    # require a GPU driver even before executing kernels; never fake that import.
+    cpu_reference = hybrid and torch.device(args.validation_device).type == 'cpu'
+    if cpu_reference:
+        core = NativeHybridCPUReference(settings, native_state)
+    else:
+        from model_config import build_model_config, tie_output_weights
+
+        # Use the architecture saved with the weights, not today's YAML.
+        with tempfile.TemporaryDirectory() as temporary:
+            config_path = Path(temporary) / 'checkpoint.yaml'
+            config_path.write_text(yaml.safe_dump(settings))
+            core_config, _, _ = build_model_config(config_path, len(tokenizer))
+        core = core_config.build(init_device='meta')
+        core.load_state_dict(native_state, strict=True, assign=True)
+        tie_output_weights(core)
+    if not hybrid:
+        from olmo_core.nn.hf import convert_state_to_hf, get_hf_config
+
+        hf_config = get_hf_config(core)
     hf_config.max_position_embeddings = max_length
     hf_config.bos_token_id = tokenizer.bos_token_id
     hf_config.eos_token_id = tokenizer.eos_token_id
@@ -195,8 +212,10 @@ def export_checkpoint(args):
     hf_config.dtype = torch.bfloat16
     converted = {name: value.contiguous() for name, value in
                  convert_state_to_hf(hf_config, native_state).items()}
-    if any(value.dtype != torch.bfloat16 for value in converted.values()):
-        raise ValueError('checkpoint contains non-BF16 model weights')
+    for name, value in converted.items():
+        expected_dtype = torch.float32 if hybrid and name.endswith('.o_norm.weight') else torch.bfloat16
+        if value.dtype != expected_dtype:
+            raise ValueError(f'checkpoint weight {name} has dtype {value.dtype}, expected {expected_dtype}')
     with torch.device('meta'):
         hf = AutoModelForCausalLM.from_config(hf_config, dtype=torch.bfloat16,
                                              attn_implementation='sdpa')
@@ -205,6 +224,7 @@ def export_checkpoint(args):
     hf.generation_config = GenerationConfig(
         bos_token_id=tokenizer.bos_token_id, eos_token_id=tokenizer.eos_token_id,
         pad_token_id=tokenizer.pad_token_id, do_sample=False,
+        **({'use_cache': False} if hybrid else {}),
     )
     args.output_dir.mkdir(parents=True, exist_ok=True)
     record = {
@@ -212,8 +232,11 @@ def export_checkpoint(args):
         'source_step': checkpoint['step'], 'source_model_config': settings['model'],
         'training_context_length': training_length, 'max_position_embeddings': max_length,
         'model_type': hf_config.model_type, 'mapped_tensor_count': len(converted),
-        'dtype': 'bfloat16', 'tokenizer': token_record, 'logits_validation': [],
-        'validation_policy': 'Exact BF16 weights and strict FP32 logits required; '
+        'dtype': 'bfloat16_with_fp32_gdn_norms' if hybrid else 'bfloat16',
+        'trust_remote_code_required': hybrid,
+        'validation_reference': 'unfused_native_cpu_recurrence' if cpu_reference else 'native_olmo_core',
+        'tokenizer': token_record, 'logits_validation': [],
+        'validation_policy': 'Exact weights and original dtypes, plus strict FP32 logits required; '
                              'BF16 logits differences are recorded separately.',
         'versions': {name: importlib.metadata.version(name) for name in (
             'torch', 'transformers', 'ai2-olmo-core', 'tokenizers',
@@ -229,18 +252,21 @@ def export_checkpoint(args):
         record['tokenizer_validation'] = validate_tokenizer(tokenizer, args.output_dir)
         del hf, converted, native_state, checkpoint
         gc.collect()
-        hf, record['offline_weight_loading'] = load_offline_model(args.output_dir)
+        hf, record['offline_weight_loading'] = load_offline_model(args.output_dir, trust_remote_code=hybrid)
         expected_state = convert_state_to_hf(hf_config, core.state_dict())
         loaded_state = hf.state_dict()
         for name, expected in expected_state.items():
-            if not torch.equal(expected, loaded_state[name]):
-                raise ValueError(f'exported weight differs from native checkpoint: {name}')
+            if expected.dtype != loaded_state[name].dtype or not torch.equal(expected, loaded_state[name]):
+                raise ValueError(f'exported weight differs from native checkpoint: {name} '
+                                 f'({expected.dtype} -> {loaded_state[name].dtype})')
         record['weight_validation'] = {'status': 'passed', 'verified_tensors': len(expected_state)}
         del expected_state, loaded_state
         device = torch.device(args.validation_device)
         core = core.to(device).eval()
         hf = hf.to(device).eval()
         lengths = args.validation_lengths or [min(32, max_length), min(1024, max_length), max_length]
+        if hybrid and not args.validation_lengths:
+            lengths.extend(length for length in (63, 64, 65, 129) if length <= max_length)
         window = getattr(hf_config, 'sliding_window', None)
         if not args.validation_lengths and window and window < max_length:
             lengths.append(window + 1)
@@ -257,6 +283,23 @@ def export_checkpoint(args):
             if dtype == torch.float32:
                 core.float()
                 hf.float()
+                if not cpu_reference:
+                    # FlashAttention 2 does not accept FP32. Keep the native
+                    # modules and RoPE, but use OLMo's SDPA backend for this
+                    # high-precision comparison only.
+                    from olmo_core.nn.attention import AttentionBackendName
+
+                    for block in core.blocks.values():
+                        attention = block.attention
+                        if not hasattr(attention, 'backend'):
+                            continue
+                        window = attention.window_size
+                        attention.backend = AttentionBackendName.torch.build(
+                            head_dim=attention.head_dim, n_heads=attention.n_heads,
+                            n_kv_heads=attention.n_kv_heads, dropout_p=0.0,
+                            window_size=(window - 1, 0) if window is not None else (-1, -1),
+                        )
+                    record['fp32_native_attention_backend'] = 'torch_sdpa'
             generator = torch.Generator().manual_seed(42)
             for length in sorted(set(lengths)):
                 inputs = torch.randint(len(tokenizer), (1, length), generator=generator).to(device)
@@ -292,7 +335,7 @@ def repack_hf(args):
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     model = AutoModelForCausalLM.from_pretrained(
-        args.source_hf, local_files_only=True, trust_remote_code=True,
+        args.source_hf, local_files_only=True, trust_remote_code=True, dtype='auto',
     )
     tokenizer = AutoTokenizer.from_pretrained(
         args.source_hf, local_files_only=True, trust_remote_code=True,
@@ -321,8 +364,13 @@ def main():
     parser.add_argument('--logits-atol', type=float, default=1e-4)
     parser.add_argument('--logits-rtol', type=float, default=1e-4)
     args = parser.parse_args()
-    if args.output_dir.exists() and (not args.output_dir.is_dir() or any(args.output_dir.iterdir())):
-        parser.error('输出目录必须为空；导出不会覆盖已有文件')
+    if args.output_dir.exists() and (
+        not args.output_dir.is_dir() or any(
+            path.name != '.gitkeep' or not path.is_file() or path.stat().st_size != 0
+            for path in args.output_dir.iterdir()
+        )
+    ):
+        parser.error('输出目录必须为空（允许空 .gitkeep）；导出不会覆盖已有文件')
     if args.max_sequence_length is not None and args.max_sequence_length <= 0:
         parser.error('--max-sequence-length 必须大于 0')
     if args.validation_lengths and any(length <= 0 for length in args.validation_lengths):

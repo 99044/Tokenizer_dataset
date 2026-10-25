@@ -109,6 +109,20 @@ GDN 文档边界重置仍需后续数据接口适配。
 weight decay `0.1`、precondition frequency `10`、max precondition dimension `1024`。
 训练 warmup 20 步，最后约 16.8% 的更新线性 cooldown 到 0。
 
+GDN 初始化增加数值保护：OLMo-core 的 BF16 `uniform(0, 16)` 可能采到精确的 0，
+随后 `log(0)` 使 `A_log=-inf`，SOAP 的 weight decay 会将其变为 NaN。
+`training/src/model_initialization.py` 仅将这些零衰减率替换为参数 dtype 的最小正规正数
+所对应的有限 log 值；不重新采样其他权重，不改变随机数状态、架构或训练超参数。
+DDP 在初始化后、创建优化器前执行保护，并记录 `initialization-repairs.json`。
+2026-10-25 的 500M 原始运行在第 3 步因此失败；修复后的运行单独保存，原失败日志保留。
+
+GDN 保留原始 BF16 计算路径，未增加 FP32 归一化或递推；衰减项及原内核自身的内部精度保持原实现。
+SOAP 恢复 checkpoint 时，`training/src/third_party/soap.py` 会直接恢复原文件中的 FP32 moments、
+预条件器和特征基，避免 PyTorch 先转换到 BF16 后造成精度丢失及混合 dtype 错误。
+该优化器状态修复不改变模型计算精度、学习率或 scheduler。
+`training/src/diagnostic_hooks.py` 保留此前 BF16 运行的只读前向/梯度检查，不修改张量或参数更新。
+从 checkpoint 恢复时使用其累计 step、optimizer、scheduler 及各 rank RNG，后续数据按 seed/step/rank 重建。
+
 | 配置 | 实际参数量 | 目标 FLOPs | 计划 FLOPs | max_steps | 计划 tokens | cooldown |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | FLOPs_3e17 | 327,544,256 | 300,000,000,000,000,000 | 299,315,365,239,848,960 | 256 | 134,217,728 | 43 |
@@ -117,7 +131,8 @@ weight decay `0.1`、precondition frequency `10`、max precondition dimension `1
 | FLOPs_1e19 | 502,815,438 | 10,000,000,000,000,000,000 | 9,998,938,904,868,544,128 | 5,627 | 2,950,168,576 | 946 |
 
 每档均在 10%–90% 的九个进度节点和 100% 最终节点保存 checkpoint，共 10 个；
-相同节点执行验证，最终验证使用 64 batches。最终 checkpoint 与 BPB 结果确认可用后，
+相同节点执行验证，最终验证使用 64 batches。恢复运行可以额外传 `--save-every 100`，
+增加每 100 步的保存，不改变训练计划、学习率和原有验证节点。最终 checkpoint 与 BPB 结果确认可用后，
 可删除该 run 的 10%–90% checkpoint 释放空间。
 
 使用完整 Hybrid 逐算子 FLOPs 口径检查架构、参数量、四卡 batch、SOAP、预算和

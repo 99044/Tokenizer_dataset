@@ -10,6 +10,7 @@ import torch.nn as nn
 import torch.optim as optim
 
 from itertools import chain
+from copy import deepcopy
 
 # Parts of the code are modifications of Pytorch's AdamW optimizer
 # Parts of the code are modifications of code from https://github.com/jiaweizzhao/GaLore/blob/master/galore_torch/galore_projector.py
@@ -82,6 +83,32 @@ class SOAP(optim.Optimizer):
         }
         super().__init__(params, defaults)
         self._data_format = data_format
+
+    def load_state_dict(self, state_dict):
+        """Restore FP32 statistics without casting them through BF16 weights.
+
+        Optimizer.load_state_dict casts floating states to parameter dtype.
+        SOAP deliberately keeps moments and eigenbases in FP32, so restore
+        those tensors from the original checkpoint after loading group options.
+        """
+        super().load_state_dict(state_dict)
+
+        def restore(value, parameter):
+            if isinstance(value, torch.Tensor):
+                dtype = torch.float32 if value.is_floating_point() else value.dtype
+                return value.to(device=parameter.device, dtype=dtype, copy=True)
+            if isinstance(value, dict):
+                return {key: restore(item, parameter) for key, item in value.items()}
+            if isinstance(value, list):
+                return [restore(item, parameter) for item in value]
+            if isinstance(value, tuple):
+                return tuple(restore(item, parameter) for item in value)
+            return deepcopy(value)
+
+        for saved_group, group in zip(state_dict['param_groups'], self.param_groups):
+            for identifier, parameter in zip(saved_group['params'], group['params']):
+                if identifier in state_dict['state']:
+                    self.state[parameter] = restore(state_dict['state'][identifier], parameter)
         
     def merge_dims(self, grad, max_precond_dim):
         """
