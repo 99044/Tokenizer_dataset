@@ -114,6 +114,7 @@ def build_optimizer(
     settings: dict[str, Any],
     *,
     primary_learning_rate: float | None = None,
+    parameter_map: dict[int, nn.Parameter] | None = None,
 ) -> tuple[torch.optim.Optimizer, dict[str, Any]]:
     config = settings["optimizer"]
     name = str(config["name"]).lower()
@@ -126,7 +127,10 @@ def build_optimizer(
     if len(betas) != 2 or any(not 0 <= value < 1 for value in betas):
         raise ValueError("optimizer.betas must contain two values in [0, 1)")
     eps = _positive_float(config["eps"], "eps")
-    named = tuple((n, p) for n, p in model.named_parameters() if p.requires_grad)
+    named = tuple(
+        (name, parameter_map[id(parameter)] if parameter_map is not None else parameter)
+        for name, parameter in model.named_parameters() if parameter.requires_grad
+    )
 
     if name == "adamw":
         group = NamedParameterGroup("all", "adamw", primary_lr, weight_decay, named)

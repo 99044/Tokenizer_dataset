@@ -12,23 +12,25 @@
 - 公共设置：32768 词表、8192 上下文、BF16、RMSNorm、RoPE、QK Norm、
   tied embeddings、无 dropout。
 
-四个 FLOPs 档使用同一家族的不同模型规模：
+四个 FLOPs 档使用同一 330M 模型规模：
 
 | model_id | 标称规模 | 实际参数量 | 层数 | hidden | FFN | attention/KV heads |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | FLOPs_3e17 | 330M | 327,544,256 | 16 | 1024 | 4096 | 8 |
 | FLOPs_1e18 | 330M | 327,544,256 | 16 | 1024 | 4096 | 8 |
 | FLOPs_3e18 | 330M | 327,544,256 | 16 | 1024 | 4096 | 8 |
-| FLOPs_1e19 | 500M | 502,815,438 | 20 | 1152 | 4608 | 9 |
+| FLOPs_1e19 | 330M | 327,544,256 | 16 | 1024 | 4096 | 8 |
 
 所有 attention head dimension 为 128。GDN head dimension 为 96，value expand 为 2.0，
 conv size 为 4；GDN heads/value heads 与对应档位的 attention heads 相同。
 
 ## 2. 优化器与训练计划
 
-四档统一使用 SOAP：peak LR `0.003`、betas `(0.95, 0.95)`、eps `1e-8`、
+前三档使用 SOAP：peak LR `0.003`、betas `(0.95, 0.95)`、eps `1e-8`、
 weight decay `0.1`、precondition frequency `10`、max precondition dimension `1024`。
-该配置来自 250M 优化器第一阶段中 BPB 最低的 O12。各档 warmup 20 步，最后约
+1e19 档使用 BF16 模型计算、FP32 主权重及 FP32 AdamW 状态，AdamW peak LR `0.0003`、
+betas `(0.9, 0.95)`、eps `1e-8`、weight decay `0.1`。
+各档 warmup 20 步，最后约
 16.8% 的更新执行 linear cooldown 到 0。
 
 训练使用 4 张 GPU，每卡 `micro_batch_size=1`、梯度累积 16 次：
@@ -42,7 +44,7 @@ weight decay `0.1`、precondition frequency `10`、max precondition dimension `1
 | FLOPs_3e17 | 300,000,000,000,000,000 | 299,315,365,239,848,960 | 256 | 134,217,728 | 43 |
 | FLOPs_1e18 | 1,000,000,000,000,000,000 | 999,666,551,875,276,800 | 855 | 448,266,240 | 144 |
 | FLOPs_3e18 | 3,000,000,000,000,000,000 | 2,998,999,655,625,830,400 | 2,565 | 1,344,798,720 | 431 |
-| FLOPs_1e19 | 10,000,000,000,000,000,000 | 9,998,938,904,868,544,128 | 5,627 | 2,950,168,576 | 946 |
+| FLOPs_1e19 | 10,000,000,000,000,000,000 | 9,999,003,920,043,704,320 | 8,552 | 4,483,710,976 | 1,438 |
 
 计划使用完整 Hybrid 逐算子 ledger、`scalar-op-cost=1`。每档选择预算内可完成的最大
 整数 update，因此计划 FLOPs 不超过目标，且再增加一步就会超过预算。
@@ -56,7 +58,6 @@ weight decay `0.1`、precondition frequency `10`、max precondition dimension `1
 | 标称规模 | 非词表参数量 |
 | --- | ---: |
 | 330M | 293,989,824 |
-| 500M | 465,066,702 |
 
 当前没有 MoE 或 token 级稀疏路由，所有非词表参数均参与每个 token 的计算。四档复用
 `tok_bpe32k_v1` tokenizer 和同一训练数据接口，均从随机初始化开始训练。

@@ -17,6 +17,7 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel as DDP
 
+from fp32_master import FP32MasterWeights
 from model_config import build_model_config, count_parameters, tie_output_weights
 from model_initialization import repair_zero_gdn_decay_rates
 from optimizer_factory import build_optimizer
@@ -170,11 +171,18 @@ def main():
         model.init_weights(max_seq_len=context_length, device=device)
         initialization_repairs = repair_zero_gdn_decay_rates(model)
         tie_output_weights(model)
+        use_fp32_master = bool(settings['training'].get('fp32_master_weights', False))
+        if use_fp32_master and settings['optimizer']['name'] != 'adamw':
+            raise ValueError('FP32 master weights currently require AdamW')
+        master_weights = FP32MasterWeights(model) if use_fp32_master else None
         optimizer, optimizer_report = build_optimizer(
             model,
             settings,
             primary_learning_rate=args.learning_rate,
+            parameter_map=None if master_weights is None else master_weights.parameter_map,
         )
+        if master_weights is not None:
+            optimizer = master_weights.install(optimizer)
 
         scheduler_settings = settings['scheduler']
         scheduler_name = scheduler_settings['name']
@@ -233,6 +241,8 @@ def main():
                 raise ValueError('恢复时 GPU 数量、训练计划、配置与数据 metadata 必须一致')
             model.load_state_dict(checkpoint['model'], strict=True)
             optimizer.load_state_dict(checkpoint['optimizer'])
+            if master_weights is not None:
+                master_weights.load_state_dict(checkpoint['fp32_master'])
             scheduler.load_state_dict(checkpoint['scheduler'])
             start_step = int(checkpoint['step'])
             resumed_rng = checkpoint['rng_by_rank'][rank]
@@ -241,6 +251,8 @@ def main():
             continuation = validate_branch_checkpoint(checkpoint, settings, metadata, plan)
             model.load_state_dict(checkpoint['model'], strict=True)
             optimizer.load_state_dict(checkpoint['optimizer'])
+            if master_weights is not None:
+                master_weights.load_state_dict(checkpoint['fp32_master'])
             start_step = int(checkpoint['step'])
             resumed_rng = checkpoint['rng_by_rank'][rank]
             scheduler_state = continuation.get('scheduler_state')
@@ -399,10 +411,13 @@ def main():
                 if rank == 0:
                     path = args.output_dir / f'step-{step}.pt'
                     temporary = path.with_suffix('.pt.tmp')
-                    torch.save(dict(
+                    checkpoint_payload = dict(
                         step=step, model=model.state_dict(), optimizer=optimizer.state_dict(),
                         scheduler=scheduler.state_dict(), plan=plan, rng_by_rank=all_rng,
-                    ), temporary)
+                    )
+                    if master_weights is not None:
+                        checkpoint_payload['fp32_master'] = master_weights.state_dict()
+                    torch.save(checkpoint_payload, temporary)
                     temporary.replace(path)
                 dist.barrier()
     finally:

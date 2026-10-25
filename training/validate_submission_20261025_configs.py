@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the four 2026-10-25 SOAP submission configs."""
+"""Validate the four 2026-10-25 submission configs."""
 
 from __future__ import annotations
 
@@ -34,9 +34,9 @@ EXPECTED = {
         "intermediate": 4096,
     },
     "FLOPs_1e19.yaml": {
-        "tier": "1e19", "size": "500m", "budget": 10_000_000_000_000_000_000,
-        "parameters": 502_815_438, "layers": 20, "hidden": 1152, "heads": 9,
-        "intermediate": 4608,
+        "tier": "1e19", "size": "330m", "budget": 10_000_000_000_000_000_000,
+        "parameters": 327_544_256, "layers": 16, "hidden": 1024, "heads": 8,
+        "intermediate": 4096,
     },
 }
 
@@ -79,16 +79,22 @@ def validate(path: Path, expected: dict) -> dict:
     require(path, "training.dtype", training["dtype"], "bfloat16")
     require(path, "training.micro_batch_size", training["micro_batch_size"], 1)
     require(path, "training.gradient_accumulation_steps", training["gradient_accumulation_steps"], 16)
+    fp32_master = expected["tier"] == "1e19"
+    require(path, "training.fp32_master_weights", training.get("fp32_master_weights", False), fp32_master)
     tokens_per_update = 4 * training["micro_batch_size"] * training["gradient_accumulation_steps"] * model["context_length"]
     require(path, "calculated tokens_per_update", tokens_per_update, 524_288)
 
-    require(path, "optimizer.name", optimizer["name"], "soap")
-    require(path, "optimizer.learning_rate", optimizer["learning_rate"], 0.003)
-    require(path, "optimizer.betas", optimizer["betas"], [0.95, 0.95])
+    require(path, "optimizer.name", optimizer["name"], "adamw" if fp32_master else "soap")
+    require(path, "optimizer.learning_rate", optimizer["learning_rate"], 0.0003 if fp32_master else 0.003)
+    require(path, "optimizer.betas", optimizer["betas"], [0.9, 0.95] if fp32_master else [0.95, 0.95])
     require(path, "optimizer.eps", optimizer["eps"], 1.0e-8)
     require(path, "optimizer.weight_decay", optimizer["weight_decay"], 0.1)
-    require(path, "optimizer.precondition_frequency", optimizer["precondition_frequency"], 10)
-    require(path, "optimizer.max_precond_dim", optimizer["max_precond_dim"], 1024)
+    if fp32_master:
+        require(path, "optimizer.precondition_frequency", optimizer.get("precondition_frequency"), None)
+        require(path, "optimizer.max_precond_dim", optimizer.get("max_precond_dim"), None)
+    else:
+        require(path, "optimizer.precondition_frequency", optimizer["precondition_frequency"], 10)
+        require(path, "optimizer.max_precond_dim", optimizer["max_precond_dim"], 1024)
 
     require(path, "scheduler.name", scheduler["name"], "linear_cooldown")
     require(path, "scheduler.warmup_steps", scheduler["warmup_steps"], 20)

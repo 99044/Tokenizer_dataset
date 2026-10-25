@@ -1,27 +1,27 @@
 run:
-  name: olmo_hybrid_500m_1e19_soap
+  name: olmo_hybrid_330m_1e19_fp32_master_adamw
   seed: 42
 scaling:
   family: olmo_hybrid_v1
-  nominal_size: 500m
-  expected_total_parameters: 502815438
+  nominal_size: 330m
+  expected_total_parameters: 327544256
   parameter_count_vocab_size: 32768
   tokens_per_update: 524288
   flops_accounting: complete Hybrid operator ledger with scalar-op-cost 1
 budget:
   total_training_flops: 10000000000000000000
-  planned_training_flops: 9998938904868544128
-  planned_training_tokens: 2950168576
-  flops_per_token_numerator: 13882479153063
-  flops_per_token_denominator: 4096
+  planned_training_flops: 9999003920043704320
+  planned_training_tokens: 4483710976
+  flops_per_token_numerator: 285449376335
+  flops_per_token_denominator: 128
 model:
   type: olmo_hybrid_scaling
-  num_layers: 20
-  hidden_size: 1152
-  num_attention_heads: 9
-  num_key_value_heads: 9
+  num_layers: 16
+  hidden_size: 1024
+  num_attention_heads: 8
+  num_key_value_heads: 8
   attention_head_dim: 128
-  intermediate_size: 4608
+  intermediate_size: 4096
   activation: swiglu
   normalization: rmsnorm
   normalization_style: reordered_norm
@@ -41,8 +41,8 @@ model:
   - gdn
   - gdn
   - attn
-  gdn_num_heads: 9
-  gdn_num_value_heads: 9
+  gdn_num_heads: 8
+  gdn_num_value_heads: 8
   gdn_head_dim: 96
   gdn_value_expand: 2.0
   gdn_allow_neg_eigval: true
@@ -56,24 +56,23 @@ model:
   dropout: 0.0
 training:
   dtype: bfloat16
-  max_steps: 5627
+  max_steps: 8552
   micro_batch_size: 1
   gradient_accumulation_steps: 16
   gradient_checkpointing: false
+  fp32_master_weights: true
 optimizer:
-  name: soap
-  learning_rate: 0.003
+  name: adamw
+  learning_rate: 0.0003
   betas:
-  - 0.95
+  - 0.9
   - 0.95
   eps: 1.0e-08
   weight_decay: 0.1
-  precondition_frequency: 10
-  max_precond_dim: 1024
 scheduler:
   name: linear_cooldown
   warmup_steps: 20
-  cooldown_steps: 946
+  cooldown_steps: 1438
   final_lr_ratio: 0.0
 data:
   tokenizer_path: null
@@ -86,32 +85,32 @@ logging:
   entity: echo-lab
   project: scicomp26
   log_every_steps: 5
-  eval_every_steps: 5627
+  eval_every_steps: 8552
   eval_batches: 8
   final_eval_batches: 64
-  checkpoint_every_steps: 5627
+  checkpoint_every_steps: 8552
   eval_steps:
-  - 563
-  - 1125
-  - 1688
-  - 2251
-  - 2814
-  - 3376
-  - 3939
-  - 4502
-  - 5064
+  - 855
+  - 1710
+  - 2566
+  - 3421
+  - 4276
+  - 5131
+  - 5986
+  - 6842
+  - 7697
   checkpoint_steps:
-  - 563
-  - 1125
-  - 1688
-  - 2251
-  - 2814
-  - 3376
-  - 3939
-  - 4502
-  - 5064
+  - 855
+  - 1710
+  - 2566
+  - 3421
+  - 4276
+  - 5131
+  - 5986
+  - 6842
+  - 7697
 output:
-  directory: runs/submission_20261025/1e19_500m_soap
+  directory: runs/submission_20261025/1e19_330m_fp32_master_adamw
 submission:
   target_date: '2026-10-25'
   budget_tier: 1e19

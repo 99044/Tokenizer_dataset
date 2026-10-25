@@ -1,7 +1,7 @@
 # 环境与运行说明
 
 本文对应 2026-10-25 提交分支 `submission_20261025`，工作目录为仓库根目录。
-四档采用同一 OLMo Hybrid 缩放家族，并分别使用 330M、330M、330M、500M 模型。
+四档采用同一 330M OLMo Hybrid 架构。
 
 ## 1. 环境与镜像
 
@@ -96,7 +96,7 @@ GDN 文档边界重置仍需后续数据接口适配。
 - `training/configs/FLOPs_3e17.yaml`：330M
 - `training/configs/FLOPs_1e18.yaml`：330M
 - `training/configs/FLOPs_3e18.yaml`：330M
-- `training/configs/FLOPs_1e19.yaml`：500M
+- `training/configs/FLOPs_1e19.yaml`：330M
 
 四档均使用 `[gdn, gdn, gdn, attn]` OLMo Hybrid、32768 词表和 8192 上下文。
 训练固定使用四张 GPU，每卡 `micro_batch_size=1`、梯度累积 16 次：
@@ -105,8 +105,10 @@ GDN 文档边界重置仍需后续数据接口适配。
 4 × 1 × 16 × 8192 = 524,288 tokens/update
 ```
 
-优化器统一为 SOAP：peak LR `0.003`、betas `(0.95, 0.95)`、eps `1e-8`、
+前三档使用 SOAP：peak LR `0.003`、betas `(0.95, 0.95)`、eps `1e-8`、
 weight decay `0.1`、precondition frequency `10`、max precondition dimension `1024`。
+1e19 档使用 AdamW：peak LR `0.0003`、betas `(0.9, 0.95)`、eps `1e-8`、weight decay `0.1`；
+模型前向/反向计算保持 BF16，更新 FP32 主权重，再复制回 BF16 模型参数。AdamW moments 保持 FP32。
 训练 warmup 20 步，最后约 16.8% 的更新线性 cooldown 到 0。
 
 GDN 初始化增加数值保护：OLMo-core 的 BF16 `uniform(0, 16)` 可能采到精确的 0，
@@ -114,7 +116,10 @@ GDN 初始化增加数值保护：OLMo-core 的 BF16 `uniform(0, 16)` 可能采�
 `training/src/model_initialization.py` 仅将这些零衰减率替换为参数 dtype 的最小正规正数
 所对应的有限 log 值；不重新采样其他权重，不改变随机数状态、架构或训练超参数。
 DDP 在初始化后、创建优化器前执行保护，并记录 `initialization-repairs.json`。
-2026-10-25 的 500M 原始运行在第 3 步因此失败；修复后的运行单独保存，原失败日志保留。
+2026-10-25 的旧 500M 运行在第 3 步因此失败；修复后的运行单独保存，原失败日志保留。
+本版 1e19 档改用与前三档相同的 330M 架构，须从随机初始化重新训练，不能恢复旧 500M checkpoint。
+1e19 档 checkpoint 额外保存 `fp32_master`，恢复时必须同时加载模型、AdamW 状态与主权重；
+仅从 BF16 模型参数重建主权重会丢失更新中的低位信息。
 
 GDN 保留原始 BF16 计算路径，未增加 FP32 归一化或递推；衰减项及原内核自身的内部精度保持原实现。
 SOAP 恢复 checkpoint 时，`training/src/third_party/soap.py` 会直接恢复原文件中的 FP32 moments、
@@ -128,14 +133,14 @@ SOAP 恢复 checkpoint 时，`training/src/third_party/soap.py` 会直接恢复�
 | FLOPs_3e17 | 327,544,256 | 300,000,000,000,000,000 | 299,315,365,239,848,960 | 256 | 134,217,728 | 43 |
 | FLOPs_1e18 | 327,544,256 | 1,000,000,000,000,000,000 | 999,666,551,875,276,800 | 855 | 448,266,240 | 144 |
 | FLOPs_3e18 | 327,544,256 | 3,000,000,000,000,000,000 | 2,998,999,655,625,830,400 | 2,565 | 1,344,798,720 | 431 |
-| FLOPs_1e19 | 502,815,438 | 10,000,000,000,000,000,000 | 9,998,938,904,868,544,128 | 5,627 | 2,950,168,576 | 946 |
+| FLOPs_1e19 | 327,544,256 | 10,000,000,000,000,000,000 | 9,999,003,920,043,704,320 | 8,552 | 4,483,710,976 | 1,438 |
 
 每档均在 10%–90% 的九个进度节点和 100% 最终节点保存 checkpoint，共 10 个；
 相同节点执行验证，最终验证使用 64 batches。恢复运行可以额外传 `--save-every 100`，
 增加每 100 步的保存，不改变训练计划、学习率和原有验证节点。最终 checkpoint 与 BPB 结果确认可用后，
 可删除该 run 的 10%–90% checkpoint 释放空间。
 
-使用完整 Hybrid 逐算子 FLOPs 口径检查架构、参数量、四卡 batch、SOAP、预算和
+使用完整 Hybrid 逐算子 FLOPs 口径检查架构、参数量、四卡 batch、对应优化器、预算和
 checkpoint 节点：
 
 ```bash
