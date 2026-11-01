@@ -1,6 +1,6 @@
 # 训练与导出
 
-本分支 `submission_20261103` 提供四档 24K 词表、8192 上下文的宽浅 Hybrid 配置。四档都采用 12 层 `[gdn, gdn, gdn, attn]`、Dense SwiGLU，并在第 12 层全局 Attention 旁接 128-token 因果 K/V 压缩分支，输出系数固定为 `0.001`。原 Attention 输出保留。
+本分支 `submission_20261103` 提供四档 24K 词表、8192 上下文的宽浅 Hybrid 配置。四档都采用 12 层 `[gdn, gdn, gdn, attn]`、Dense SwiGLU，并在第 12 层全局 Attention 旁接 128-token 因果 K/V 压缩分支。3e17 档输出系数为 `0.0001`，其余三档为 `0.001`；原 Attention 输出保留。
 
 | 配置 | 总参数 | hidden | FFN | heads | 优化器 | 步数 | tokens/update | 计划训练 tokens |
 | --- | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: |
@@ -9,7 +9,7 @@
 | `FLOPs_3e18.yaml` | 200,197,018 | 640 | 2048 | 5 | SOAP | 16,902 | 262,144 | 4,430,757,888 |
 | `FLOPs_1e19.yaml` | 1,175,476,632 | 1536 | 6144 | 12 | SOAP | 5,346 | 524,288 | 2,802,843,648 |
 
-实际步数和 token 以 YAML 的 `training` 与 `budget` 字段为准。四档按 4 卡 DDP、每卡 micro batch 1 配置，梯度累积分别为 4、6、8、16。模型使用 BF16，四档均采用 SOAP，峰值学习率为 0.003。3e17 档采用约 5% warmup、保持峰值学习率到 70% 进度、最后 30% 线性降至 3e-5；其余三档仍为 20 步 warmup、最后约 16.7% 线性降至 0。初始化时主干指定投影和 embedding 权重乘以 0.8；压缩分支的输出另乘 0.001。每档训练进度约每 10% 保存一次，自动只保留最近两个完整 checkpoint。中断后用相同 YAML、数据和 GPU 数量传 `--resume` 继续。
+实际步数和 token 以 YAML 的 `training` 与 `budget` 字段为准。四档按 4 卡 DDP、每卡 micro batch 1 配置，梯度累积分别为 4、6、8、16。模型使用 BF16，四档均采用 SOAP，峰值学习率为 0.003。3e17 档采用约 5% warmup、保持峰值学习率到 70% 进度、最后 30% 线性降至 3e-5；其余三档仍为 20 步 warmup、最后约 16.7% 线性降至 0。初始化时主干指定投影和 embedding 权重乘以 0.8；压缩分支的输出另乘对应 YAML 中的系数。每档训练进度约每 10% 保存一次，自动只保留最近两个完整 checkpoint。中断后用相同 YAML、数据和 GPU 数量传 `--resume` 继续。
 
 需要在进程意外退出后自动续训时，用 `training/src/auto_resume.sh` 包住原来的启动命令，并保持固定的 `--run-name` 和 `--runs-dir`。例如 1e19 档：
 

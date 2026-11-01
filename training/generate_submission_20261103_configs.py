@@ -37,7 +37,8 @@ def make_config(tier):
         vocab_size=24576,
         compressed_attention=dict(
             layer_index=11, block_size=128,
-            intermediate_size=intermediate, scale=0.001,
+            intermediate_size=intermediate,
+            scale=0.0001 if label == '3e17' else 0.001,
         ),
     )
     shape = dict(model, gdn_value_dim=192)

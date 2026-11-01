@@ -28,8 +28,9 @@ def hybrid_hf_config(settings, vocab_size):
             raise ValueError('compressed_attention must attach to a full-attention layer')
         if compressed.get('intermediate_size') != model['intermediate_size']:
             raise ValueError('compressed intermediate size must match model intermediate size')
-        if compressed.get('scale') != 0.001:
-            raise ValueError('compressed attention scale must be 0.001')
+        scale = compressed.get('scale')
+        if isinstance(scale, bool) or not isinstance(scale, (int, float)) or not math.isfinite(scale) or not 0.0 < scale <= 1.0:
+            raise ValueError('compressed attention scale must be finite and in (0, 1]')
     config = SubmissionHybridConfig(
         vocab_size=vocab_size, hidden_size=model['hidden_size'],
         intermediate_size=model['intermediate_size'], num_hidden_layers=model['num_layers'],

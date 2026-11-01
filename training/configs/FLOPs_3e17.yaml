@@ -60,7 +60,7 @@ model:
     layer_index: 11
     block_size: 128
     intermediate_size: 1984
-    scale: 0.001
+    scale: 0.0001
 training:
   dtype: bfloat16
   max_steps: 10090

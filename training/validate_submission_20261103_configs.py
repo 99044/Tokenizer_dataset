@@ -29,7 +29,7 @@ def main():
         assert model['num_attention_heads'] == heads
         assert model['vocab_size'] == 24576
         assert model['compressed_attention']['block_size'] == 128
-        assert model['compressed_attention']['scale'] == 0.001
+        assert model['compressed_attention']['scale'] == (0.0001 if label == '3e17' else 0.001)
         assert training['gradient_accumulation_steps'] == accumulation
         assert actual['optimizer']['name'] == optimizer
         assert actual['optimizer']['learning_rate'] == 0.003

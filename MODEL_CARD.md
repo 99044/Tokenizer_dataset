@@ -1,6 +1,6 @@
 # Model Card
 
-本分支 `submission_20261103` 定义四个 OLMo Hybrid 模型，使用 24576 词表、8192 上下文和 BF16。各模型均为 12 层，按三层 GDN、一层全局 Attention 排列；每层保留 Dense SwiGLU FFN，最后一层 Attention 旁接 128-token 因果 K/V 压缩分支，输出按 0.001 加权。
+本分支 `submission_20261103` 定义四个 OLMo Hybrid 模型，使用 24576 词表、8192 上下文和 BF16。各模型均为 12 层，按三层 GDN、一层全局 Attention 排列；每层保留 Dense SwiGLU FFN，最后一层 Attention 旁接 128-token 因果 K/V 压缩分支。3e17 档输出按 0.0001 加权，其余三档按 0.001 加权。
 
 | 档位 | 总参数 | 非词表参数 | hidden | FFN | attention heads | 优化器 |
 | --- | ---: | ---: | ---: | ---: | ---: | --- |
