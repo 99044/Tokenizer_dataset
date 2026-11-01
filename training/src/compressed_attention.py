@@ -1,8 +1,4 @@
 """Causal 128-token K/V compression beside one existing attention layer.
-
-The original attention output remains intact. A completed block becomes
-visible only after its last input token, so this path cannot read future
-tokens.
 """
 
 from __future__ import annotations
@@ -58,8 +54,6 @@ class CompressedKVBranch(nn.Module):
         query = x.reshape(batch, length, self.num_heads, head_dim).transpose(1, 2)
         key = key.reshape(batch, complete_blocks, self.num_heads, head_dim).transpose(1, 2)
         value = value.reshape(batch, complete_blocks, self.num_heads, head_dim).transpose(1, 2)
-        # The dummy zero block is always visible; it avoids an all-masked row
-        # for the first 127 tokens, where no compressed block is complete.
         key = torch.cat((torch.zeros_like(key[:, :, :1]), key), dim=2)
         value = torch.cat((torch.zeros_like(value[:, :, :1]), value), dim=2)
         token_end = torch.arange(length, device=x.device)[:, None] + 1
