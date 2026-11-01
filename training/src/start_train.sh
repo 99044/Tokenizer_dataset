@@ -194,7 +194,9 @@ if [[ "$DRY_RUN" == false ]]; then
   docker info >/dev/null 2>&1 || fail "Cannot access Docker; check daemon and account permissions"
   docker image inspect "$IMAGE" >/dev/null || fail "Build or load the image first: $IMAGE"
 fi
-[[ ! -e "$RUN_DIR" ]] || fail "Run directory already exists: $RUN_DIR (use a new --run-name)"
+if [[ -e "$RUN_DIR" ]]; then
+  [[ -n "$RESUME" && -d "$RUN_DIR" ]] || fail "Run directory already exists: $RUN_DIR (use --resume or a new --run-name)"
+fi
 
 COMMON=(
   --rm --pull=never
@@ -323,7 +325,13 @@ docker run "${COMMON[@]}" "${GPU_ARGS[@]}" "$IMAGE" python -c \
   'import sys, torch; n=int(sys.argv[1]); assert torch.cuda.is_available(), "CUDA unavailable"; assert torch.cuda.device_count()==n, "GPU count mismatch"; print("GPUs:", [torch.cuda.get_device_name(i) for i in range(n)])' \
   "$NPROC"
 mkdir -p -- "$RUNS_DIR"
-mkdir -- "$RUN_DIR"
+if [[ ! -d "$RUN_DIR" ]]; then
+  mkdir -- "$RUN_DIR"
+fi
 printf 'Log and checkpoints: %s\n' "$RUN_DIR"
-"${TRAIN[@]}" 2>&1 | tee "$RUN_DIR/console.log"
+if [[ -n "$RESUME" ]]; then
+  "${TRAIN[@]}" 2>&1 | tee -a "$RUN_DIR/console.log"
+else
+  "${TRAIN[@]}" 2>&1 | tee "$RUN_DIR/console.log"
+fi
 printf 'Completed: %s\n' "$RUN_DIR"

@@ -11,6 +11,23 @@
 
 实际步数和 token 以 YAML 的 `training` 与 `budget` 字段为准。四档按 4 卡 DDP、每卡 micro batch 1 配置，梯度累积分别为 4、6、8、16。模型使用 BF16，四档均采用 SOAP；学习率统一为 0.003、warmup 为 20 步、末端学习率为 0，沿用首次提交配方。初始化时主干指定投影和 embedding 权重乘以 0.8；压缩分支的输出另乘 0.001。每档训练进度约每 10% 保存一次，自动只保留最近两个完整 checkpoint。中断后用相同 YAML、数据和 GPU 数量传 `--resume` 继续。
 
+需要在进程意外退出后自动续训时，用 `training/src/auto_resume.sh` 包住原来的启动命令，并保持固定的 `--run-name` 和 `--runs-dir`。例如 1e19 档：
+
+```bash
+RUNS_DIR=/path/to/runs
+RUN_NAME=wide_compressed_1e19
+mkdir -p "$RUNS_DIR"
+nohup bash training/src/auto_resume.sh \
+  --run-dir "$RUNS_DIR/$RUN_NAME" --max-steps 5346 -- \
+  bash training/src/start_train.sh \
+    --config training/configs/FLOPs_1e19.yaml --gpus 0,1,2,3 \
+    --data-dir /path/to/token-cache --data-format packed \
+    --run-name "$RUN_NAME" --runs-dir "$RUNS_DIR" \
+  > "$RUNS_DIR/$RUN_NAME.watchdog.log" 2>&1 < /dev/null &
+```
+
+脚本仅从同一输出目录最近的完整 `step-*.pt` 恢复。最终 checkpoint 存在时停止；没有可恢复 checkpoint、达到重试上限，或连续重试仍停在同一 checkpoint 时停止并写入 `*.auto-resume.tsv`。恢复要求模型配置、数据、GPU 数和训练计划完全一致。持续复现的 NaN 需要先修复原因，自动续训不能消除数值错误。
+
 `training/generate_submission_20261103_configs.py` 可重新生成四个 YAML；`python training/validate_submission_20261103_configs.py` 检查配置与评测默认值。预算由原 Hybrid 逐算子 ledger 与新增压缩分支的保守三倍前向估计相加，计划 FLOPs 留约 1% 余量；该估计不是压缩分支完整逐算子审计。`training/count_flops.py --auto-hybrid` 对此分支会拒绝把缺少压缩分支的 ledger 当成完整核算。
 
 训练数据目录需包含 `metadata.json`、`train.npy`、`validation.npy`，其 tokenizer 词表大小必须为 24576。若使用现有 24K 缓存，先核对目录结构与 `metadata.json`；训练器会检查词表及上下文长度。启动示例：
