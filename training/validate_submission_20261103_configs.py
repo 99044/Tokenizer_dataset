@@ -33,8 +33,13 @@ def main():
         assert training['gradient_accumulation_steps'] == accumulation
         assert actual['optimizer']['name'] == optimizer
         assert actual['optimizer']['learning_rate'] == 0.003
-        assert actual['scheduler']['warmup_steps'] == 20
-        assert actual['scheduler']['final_lr_ratio'] == 0.0
+        if label == '3e17':
+            assert actual['scheduler']['warmup_steps'] == 505
+            assert actual['scheduler']['cooldown_steps'] == 3027
+            assert actual['scheduler']['final_lr_ratio'] == 0.01
+        else:
+            assert actual['scheduler']['warmup_steps'] == 20
+            assert actual['scheduler']['final_lr_ratio'] == 0.0
         assert actual['initialization']['projection_scale'] == 0.8
         assert actual['scaling']['expected_branch_parameters'] > 0
         assert budget_record['planned_training_flops'] <= budget * 99 // 100

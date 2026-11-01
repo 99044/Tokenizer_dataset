@@ -79,9 +79,9 @@ optimizer:
   max_precond_dim: 1024
 scheduler:
   name: linear_cooldown
-  warmup_steps: 20
-  cooldown_steps: 1685
-  final_lr_ratio: 0.0
+  warmup_steps: 505
+  cooldown_steps: 3027
+  final_lr_ratio: 0.01
 data:
   tokenizer_path: null
   train_path: null

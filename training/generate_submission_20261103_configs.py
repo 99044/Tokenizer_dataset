@@ -91,10 +91,16 @@ def make_config(tier):
     optimizer.update(precondition_frequency=10, max_precond_dim=1024)
     settings['optimizer'] = optimizer
     settings['initialization'] = dict(projection_scale=0.8, repair_gdn_a_log=True)
-    settings['scheduler'] = dict(
-        name='linear_cooldown', warmup_steps=20,
-        cooldown_steps=max(1, round(max_steps * 0.167)), final_lr_ratio=0.0,
-    )
+    if label == '3e17':
+        settings['scheduler'] = dict(
+            name='linear_cooldown', warmup_steps=math.ceil(max_steps * 0.05),
+            cooldown_steps=max(1, round(max_steps * 0.30)), final_lr_ratio=0.01,
+        )
+    else:
+        settings['scheduler'] = dict(
+            name='linear_cooldown', warmup_steps=20,
+            cooldown_steps=max(1, round(max_steps * 0.167)), final_lr_ratio=0.0,
+        )
     settings['logging'] = dict(
         backend='wandb', entity='echo-lab', project='scicomp26',
         log_every_steps=5, eval_every_steps=max_steps,
