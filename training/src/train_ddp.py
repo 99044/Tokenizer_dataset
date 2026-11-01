@@ -455,6 +455,7 @@ def main():
 
 
 if __name__ == '__main__':
-    from diagnostic_hooks import install
-    install()
+    if os.environ.get('SCICOMP_DIAGNOSTICS') == '1':
+        from diagnostic_hooks import install
+        install()
     main()
