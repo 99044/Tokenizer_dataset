@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-"""Single-node, 8-GPU Transformers evaluation: JSONL -> packing -> bpb/EvalTime.
+"""Single-node, multi-GPU Transformers evaluation: JSONL -> packing -> bpb/EvalTime.
 
-BF16 and SDPA are example choices; adapt them for the submitted model.
 Warms each batch shape five times before one complete evaluation.
 EvalTime counts only forward (including the vocabulary projection), in
 s / (1B non-vocabulary active parameters * 1M scored tokens).
@@ -89,8 +88,12 @@ def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset-path", type=Path, required=True, help="JSONL with a text field")
     parser.add_argument("--model-path", required=True, help="Local Transformers checkpoint")
-    parser.add_argument("--batch-size", type=int, default=1, help="Sequences per GPU")
+    parser.add_argument("--batch-size", type=int, default=32, help="Sequences per GPU")
     parser.add_argument("--sequence-length", type=int, default=8192)
+    parser.add_argument(
+        "--fusion", choices=("none", "ffn_rmsnorm"), default="ffn_rmsnorm",
+        help="none=BF16 baseline, ffn_rmsnorm=FFN and RMSNorm fusion",
+    )
     parser.add_argument("--output", type=Path, default=Path("result.json"))
     args = parser.parse_args()
     if not 1 <= args.sequence_length <= 8192:
@@ -122,7 +125,9 @@ def main():
     if rank == 0:
         temporary = tempfile.TemporaryDirectory(prefix=".eval-", dir=args.output.parent)
         cache_dir = Path(temporary.name).resolve()
-        tokenizer = AutoTokenizer.from_pretrained(args.model_path, local_files_only=True)
+        tokenizer = AutoTokenizer.from_pretrained(
+            args.model_path, local_files_only=True, trust_remote_code=True
+        )
         metadata = pack_jsonl(args.dataset_path, tokenizer, cache_dir)
         shared[0] = (str(cache_dir), metadata)
         print(f"Packed {metadata['total_tokens']} text tokens", flush=True)
@@ -131,19 +136,24 @@ def main():
     tokens = np.memmap(Path(cache_path) / "tokens.bin", dtype=np.int32, mode="r")
     is_text = np.memmap(Path(cache_path) / "is_text.bin", dtype=np.bool_, mode="r")
     num_sequences = math.ceil((len(tokens) - 1) / args.sequence_length)
-    global_batch_size = args.batch_size * 8
+    global_batch_size = args.batch_size * dist.get_world_size()
     num_steps = math.ceil(num_sequences / global_batch_size)
 
-    config = AutoConfig.from_pretrained(args.model_path, local_files_only=True)
+    config = AutoConfig.from_pretrained(
+        args.model_path, local_files_only=True, trust_remote_code=True
+    )
     config = config.get_text_config()
-    # Example precision and attention implementation; teams may change both.
     model, loading_info = AutoModelForCausalLM.from_pretrained(
         args.model_path, config=config, dtype=torch.bfloat16, attn_implementation="sdpa",
-        local_files_only=True, output_loading_info=True,
+        local_files_only=True, trust_remote_code=True, output_loading_info=True,
     )
     if loading_info.get("missing_keys") or loading_info.get("mismatched_keys"):
         raise RuntimeError(f"Checkpoint did not fully initialize the language model: {loading_info}")
     model.to(device).eval()
+    from fusion import install_operator_fusion
+    fusion_info = install_operator_fusion(model, mode=args.fusion)
+    if rank == 0:
+        print(f"Fusion installed: {fusion_info}", flush=True)
     active_params = active_parameter_count(model)
     if active_params <= 0:
         raise ValueError("Non-vocabulary active parameter count must be positive")
@@ -227,7 +237,15 @@ def main():
     if not math.isfinite(bpb) or not math.isfinite(evaltime) or evaltime <= 0:
         raise RuntimeError("Evaluation produced a non-finite loss or invalid forward time")
     if rank == 0:
-        result = dict(model_path=args.model_path, bpb=bpb, evaltime=evaltime)
+        result = dict(
+            model_path=args.model_path, bpb=bpb, evaltime=evaltime,
+            batch_size_per_gpu=args.batch_size,
+            distributed_world_size=dist.get_world_size(),
+            sequence_length=args.sequence_length,
+            fusion=fusion_info, active_parameters=active_params,
+            forward_seconds=forward_seconds,
+            scored_tokens=count_tensor.item(),
+        )
         args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
         print(json.dumps(result, ensure_ascii=False), flush=True)
     dist.barrier()

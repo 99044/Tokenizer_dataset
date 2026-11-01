@@ -18,8 +18,9 @@ import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from fp32_master import FP32MasterWeights
+from compressed_attention import attach_compressed_attention
 from model_config import build_model_config, count_parameters, tie_output_weights
-from model_initialization import repair_zero_gdn_decay_rates
+from model_initialization import repair_zero_gdn_decay_rates, scale_projections
 from optimizer_factory import build_optimizer
 from packed_token_sampler import PackedTokenSampler
 from training_options import resolve_training_options
@@ -171,6 +172,16 @@ def main():
         model.init_weights(max_seq_len=context_length, device=device)
         initialization_repairs = repair_zero_gdn_decay_rates(model)
         tie_output_weights(model)
+        scaled_parameters = scale_projections(
+            model, float(settings.get('initialization', {}).get('projection_scale', 1.0))
+        )
+        compressed_parameters = attach_compressed_attention(model, settings, device)
+        expected_parameters = settings.get('scaling', {}).get('expected_total_parameters')
+        if expected_parameters is not None and count_parameters(model) != expected_parameters:
+            raise ValueError(f'model parameter count {count_parameters(model)} != {expected_parameters}')
+        expected_branch = settings.get('scaling', {}).get('expected_branch_parameters')
+        if expected_branch is not None and compressed_parameters != expected_branch:
+            raise ValueError(f'compressed branch parameters {compressed_parameters} != {expected_branch}')
         use_fp32_master = bool(settings['training'].get('fp32_master_weights', False))
         if use_fp32_master and settings['optimizer']['name'] != 'adamw':
             raise ValueError('FP32 master weights currently require AdamW')
@@ -293,6 +304,9 @@ def main():
             (args.output_dir / 'initialization-repairs.json').write_text(
                 json.dumps(initialization_repairs, indent=2) + '\n'
             )
+            (args.output_dir / 'scaled-projections.json').write_text(
+                json.dumps(scaled_parameters, indent=2) + '\n'
+            )
             if initialization_repairs:
                 print(f'GDN initialization repairs: {json.dumps(initialization_repairs)}', flush=True)
             (args.output_dir / 'run-plan.json').write_text(json.dumps(plan, indent=2, ensure_ascii=False))
@@ -308,6 +322,7 @@ def main():
                 from hybrid_flops import runtime_graph_metadata
 
                 runtime_metadata = runtime_graph_metadata(model)
+                runtime_metadata['compressed_branch_parameters'] = compressed_parameters
                 runtime_metadata.update(first_optimizer_step=start_step + 1, planned_stop_step=stop_step)
                 runtime_path = args.output_dir / f'runtime_graph-start-{start_step + 1}.json'
                 runtime_path.write_text(json.dumps(runtime_metadata, indent=2, ensure_ascii=False) + '\n')
@@ -419,6 +434,16 @@ def main():
                         checkpoint_payload['fp32_master'] = master_weights.state_dict()
                     torch.save(checkpoint_payload, temporary)
                     temporary.replace(path)
+                    keep_last = settings.get('logging', {}).get('checkpoint_keep_last')
+                    if keep_last is not None:
+                        if isinstance(keep_last, bool) or not isinstance(keep_last, int) or keep_last < 1:
+                            raise ValueError('logging.checkpoint_keep_last must be a positive integer')
+                        checkpoints = sorted(
+                            args.output_dir.glob('step-*.pt'),
+                            key=lambda item: int(item.stem.split('-')[-1]),
+                        )
+                        for old_path in checkpoints[:-keep_last]:
+                            old_path.unlink()
                 dist.barrier()
     finally:
         failed = sys.exc_info()[0] is not None

@@ -152,6 +152,64 @@ class PostNormGDNLayer(GradientCheckpointingLayer):
         return hidden_states + self.post_feedforward_layernorm(self.mlp(hidden_states))
 
 
+class CompressedKVBranch(nn.Module):
+    """Exact 128-token causal compressed branch used by the native checkpoint."""
+
+    def __init__(self, hidden_size, num_heads, block_size, intermediate_size):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.num_heads = num_heads
+        self.block_size = block_size
+        self.k_compress = nn.Linear(block_size * hidden_size, hidden_size, bias=False)
+        self.v_compress = nn.Linear(block_size * hidden_size, hidden_size, bias=False)
+        self.k_up = nn.Linear(hidden_size, intermediate_size, bias=False)
+        self.k_down = nn.Linear(intermediate_size, hidden_size, bias=False)
+        self.v_up = nn.Linear(hidden_size, intermediate_size, bias=False)
+        self.v_down = nn.Linear(intermediate_size, hidden_size, bias=False)
+
+    def forward(self, x):
+        batch, length, width = x.shape
+        complete_blocks = length // self.block_size
+        if complete_blocks == 0:
+            return torch.zeros_like(x)
+        packed = x[:, :complete_blocks * self.block_size, :].reshape(
+            batch, complete_blocks, self.block_size * width,
+        )
+        key = self.k_compress(packed)
+        value = self.v_compress(packed)
+        key = key + self.k_down(F.silu(self.k_up(key)))
+        value = value + self.v_down(F.silu(self.v_up(value)))
+        head_dim = width // self.num_heads
+        query = x.reshape(batch, length, self.num_heads, head_dim).transpose(1, 2)
+        key = key.reshape(batch, complete_blocks, self.num_heads, head_dim).transpose(1, 2)
+        value = value.reshape(batch, complete_blocks, self.num_heads, head_dim).transpose(1, 2)
+        key = torch.cat((torch.zeros_like(key[:, :, :1]), key), dim=2)
+        value = torch.cat((torch.zeros_like(value[:, :, :1]), value), dim=2)
+        token_end = torch.arange(length, device=x.device)[:, None] + 1
+        block_end = torch.arange(complete_blocks + 1, device=x.device)[None, :] * self.block_size
+        allowed = block_end <= token_end
+        output = F.scaled_dot_product_attention(
+            query, key, value, attn_mask=allowed, dropout_p=0.0, is_causal=False,
+        )
+        return output.transpose(1, 2).contiguous().reshape(batch, length, width)
+
+
+class CompressedAttention(nn.Module):
+    def __init__(self, base, config):
+        super().__init__()
+        spec = config.compressed_attention
+        self.base = base
+        self.compressed = CompressedKVBranch(
+            config.hidden_size, config.num_attention_heads,
+            spec['block_size'], spec['intermediate_size'],
+        )
+        self.scale = spec['scale']
+
+    def forward(self, hidden_states, *args, **kwargs):
+        output, weights = self.base(hidden_states, *args, **kwargs)
+        return output + self.scale * self.compressed(hidden_states), weights
+
+
 class SubmissionHybridModel(OlmoHybridModel):
     config_class = SubmissionHybridConfig
     # Native FLA constructs its gated norm weights in FP32, even for BF16 runs.
@@ -169,6 +227,13 @@ class SubmissionHybridModel(OlmoHybridModel):
                 layer.post_feedforward_layernorm = SubmissionRMSNorm(config.hidden_size, config.rms_norm_eps)
         self.norm = SubmissionRMSNorm(config.hidden_size, config.rms_norm_eps)
         self.rotary_emb = SubmissionRotaryEmbedding(config)
+        spec = getattr(config, 'compressed_attention', None)
+        if spec is not None:
+            index = int(spec['layer_index'])
+            if config.layer_types[index] != 'full_attention':
+                raise ValueError('compressed branch must attach to a full-attention layer')
+            layer = self.layers[index]
+            layer.self_attn = CompressedAttention(layer.self_attn, config)
         self.post_init()
 
 

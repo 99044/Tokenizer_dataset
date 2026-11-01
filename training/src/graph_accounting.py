@@ -220,7 +220,9 @@ def make_template(model_config, settings, micro_batch_size, vocab_size):
     )
 
 
-def audit_ledger(ledger, model_config, settings, micro_batch_size, vocab_size, source_root):
+def audit_ledger(ledger, model_config, settings, micro_batch_size, vocab_size, source_root, *, base_only=False):
+    if settings['model'].get('compressed_attention') and not base_only:
+        raise ValueError('compressed attention requires an expanded operator ledger')
     if not isinstance(ledger, dict):
         raise ValueError('ledger must be a JSON object')
     if ledger.get('schema') != SCHEMA or ledger.get('status') != 'complete':

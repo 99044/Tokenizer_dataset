@@ -1,27 +1,29 @@
 run:
-  name: olmo_hybrid_330m_3e17_soap
+  name: wide_compressed_256_3e17_soap
   seed: 42
 scaling:
-  family: olmo_hybrid_v1
-  nominal_size: 330m
-  expected_total_parameters: 327544256
-  parameter_count_vocab_size: 32768
-  tokens_per_update: 524288
-  flops_accounting: complete Hybrid operator ledger with scalar-op-cost 1
+  family: wide_compressed_24k
+  nominal_size: 50m
+  expected_total_parameters: 47756772
+  expected_branch_parameters: 18808832
+  parameter_count_vocab_size: 24576
+  tokens_per_update: 131072
+  flops_accounting: Hybrid ledger plus compressed-branch upper estimate
 budget:
   total_training_flops: 300000000000000000
-  planned_training_flops: 299315365239848960
-  planned_training_tokens: 134217728
-  flops_per_token_numerator: 285449376335
-  flops_per_token_denominator: 128
+  planned_training_flops: 296984324404926080
+  planned_training_tokens: 1322516480
+  flops_per_token_numerator: 1839595666532
+  flops_per_token_denominator: 8192
+  flops_per_update: 29433530664512
 model:
   type: olmo_hybrid_scaling
-  num_layers: 16
-  hidden_size: 1024
-  num_attention_heads: 8
-  num_key_value_heads: 8
+  num_layers: 12
+  hidden_size: 256
+  num_attention_heads: 2
+  num_key_value_heads: 2
   attention_head_dim: 128
-  intermediate_size: 4096
+  intermediate_size: 1984
   activation: swiglu
   normalization: rmsnorm
   normalization_style: reordered_norm
@@ -41,24 +43,29 @@ model:
   - gdn
   - gdn
   - attn
-  gdn_num_heads: 8
-  gdn_num_value_heads: 8
+  gdn_num_heads: 2
+  gdn_num_value_heads: 2
   gdn_head_dim: 96
   gdn_value_expand: 2.0
   gdn_allow_neg_eigval: true
   gdn_conv_size: 4
   gdn_norm_eps: 1.0e-05
   context_length: 8192
-  vocab_size: 32768
+  vocab_size: 24576
   tie_word_embeddings: true
   attention_bias: false
   mlp_bias: false
   dropout: 0.0
+  compressed_attention:
+    layer_index: 11
+    block_size: 128
+    intermediate_size: 1984
+    scale: 0.001
 training:
   dtype: bfloat16
-  max_steps: 256
+  max_steps: 10090
   micro_batch_size: 1
-  gradient_accumulation_steps: 16
+  gradient_accumulation_steps: 4
   gradient_checkpointing: false
 optimizer:
   name: soap
@@ -73,7 +80,7 @@ optimizer:
 scheduler:
   name: linear_cooldown
   warmup_steps: 20
-  cooldown_steps: 43
+  cooldown_steps: 1685
   final_lr_ratio: 0.0
 data:
   tokenizer_path: null
@@ -86,33 +93,27 @@ logging:
   entity: echo-lab
   project: scicomp26
   log_every_steps: 5
-  eval_every_steps: 256
+  eval_every_steps: 10090
   eval_batches: 8
   final_eval_batches: 64
-  checkpoint_every_steps: 256
-  eval_steps:
-  - 26
-  - 51
-  - 77
-  - 102
-  - 128
-  - 154
-  - 179
-  - 205
-  - 230
+  checkpoint_every_steps: 10090
   checkpoint_steps:
-  - 26
-  - 51
-  - 77
-  - 102
-  - 128
-  - 154
-  - 179
-  - 205
-  - 230
+  - 1009
+  - 2018
+  - 3027
+  - 4036
+  - 5045
+  - 6054
+  - 7063
+  - 8072
+  - 9081
+  checkpoint_keep_last: 2
 output:
-  directory: runs/submission_20261025/3e17_330m_soap
+  directory: runs/submission_20261103/3e17
 submission:
-  target_date: '2026-10-25'
+  target_date: '2026-11-03'
   budget_tier: 3e17
   data_parallel_size: 4
+initialization:
+  projection_scale: 0.8
+  repair_gdn_a_log: true

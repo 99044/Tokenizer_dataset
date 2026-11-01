@@ -127,7 +127,7 @@ def _validate_preset(settings):
             raise ValueError('scaling num_layers must contain complete four-layer Hybrid groups')
         if model.get('hidden_size') != model.get('num_attention_heads', 0) * model.get('attention_head_dim', 0):
             raise ValueError('scaling hidden_size must equal attention heads * head dimension')
-        if model.get('intermediate_size') != 4 * model.get('hidden_size', 0):
+        if not model.get('compressed_attention') and model.get('intermediate_size') != 4 * model.get('hidden_size', 0):
             raise ValueError('scaling intermediate_size must equal 4 * hidden_size')
         if model.get('num_key_value_heads') != model.get('num_attention_heads'):
             raise ValueError('scaling family requires equal attention and KV head counts')
@@ -409,8 +409,10 @@ def signal_scan_other(tokens, heads, key, value, scalar_cost):
     return ops.items
 
 
-def complete_hybrid_ledger(model_config, settings, micro_batch_size, vocab_size, scalar_cost):
+def complete_hybrid_ledger(model_config, settings, micro_batch_size, vocab_size, scalar_cost, *, base_only=False):
     """Generate all components automatically; no pending template is returned."""
+    if settings['model'].get('compressed_attention') and not base_only:
+        raise ValueError('compressed attention requires an expanded operator ledger')
     _validate_preset(settings)
     ledger = make_template(model_config, settings, micro_batch_size, vocab_size)
     ledger['source_files'].update(_reference_sources())

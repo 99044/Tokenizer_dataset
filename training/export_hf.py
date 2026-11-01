@@ -170,6 +170,7 @@ def export_checkpoint(args):
     settings = plan['settings']
     model_type = settings['model']['type']
     hybrid = model_type in {'olmo_hybrid_scaling', 'olmo_hybrid_1b'}
+    compressed = settings['model'].get('compressed_attention') is not None
     if model_type != 'olmo3_1b' and not hybrid:
         raise ValueError(f'unsupported native export architecture: {model_type}')
     tokenizer, token_record = read_tokenizer(args.tokenizer_dir, plan['data'])
@@ -188,6 +189,8 @@ def export_checkpoint(args):
     # CPU Hybrid checks use an independent token recurrence. Native FLA imports
     # require a GPU driver even before executing kernels; never fake that import.
     cpu_reference = hybrid and torch.device(args.validation_device).type == 'cpu'
+    if compressed and cpu_reference:
+        raise ValueError('compressed-attention export validation requires a CUDA device')
     if cpu_reference:
         core = NativeHybridCPUReference(settings, native_state)
     else:
@@ -199,6 +202,9 @@ def export_checkpoint(args):
             config_path.write_text(yaml.safe_dump(settings))
             core_config, _, _ = build_model_config(config_path, len(tokenizer))
         core = core_config.build(init_device='meta')
+        if compressed:
+            from compressed_attention import attach_compressed_attention
+            attach_compressed_attention(core, settings, torch.device('meta'))
         core.load_state_dict(native_state, strict=True, assign=True)
         tie_output_weights(core)
     if not hybrid:
@@ -291,6 +297,8 @@ def export_checkpoint(args):
 
                     for block in core.blocks.values():
                         attention = block.attention
+                        if hasattr(attention, 'base'):
+                            attention = attention.base
                         if not hasattr(attention, 'backend'):
                             continue
                         window = attention.window_size

@@ -176,7 +176,7 @@ def _build_olmo_hybrid(
             raise ValueError("hidden_size must equal num_attention_heads * attention_head_dim")
         if model["num_key_value_heads"] != model["num_attention_heads"]:
             raise ValueError("the reviewed scaling family uses equal attention and KV head counts")
-        if model["intermediate_size"] != 4 * model["hidden_size"]:
+        if not model.get("compressed_attention") and model["intermediate_size"] != 4 * model["hidden_size"]:
             raise ValueError("the reviewed scaling family uses intermediate_size = 4 * hidden_size")
         if model["gdn_num_heads"] != model["num_attention_heads"]:
             raise ValueError("the reviewed scaling family keeps GDN and attention head counts equal")

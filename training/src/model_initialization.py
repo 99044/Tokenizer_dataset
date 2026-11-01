@@ -6,6 +6,25 @@ import torch
 
 
 @torch.no_grad()
+def scale_projections(model, scale):
+    if not 0.0 < scale <= 1.0:
+        raise ValueError('initialization.projection_scale must be in (0, 1]')
+    suffixes = (
+        '.attention.w_q.weight', '.attention.w_k.weight',
+        '.attention.w_v.weight', '.attention.w_out.weight',
+        '.feed_forward.w1.weight', '.feed_forward.w2.weight',
+        '.feed_forward.w3.weight',
+    )
+    scaled = []
+    if scale != 1.0:
+        for name, parameter in model.named_parameters():
+            if name == 'embeddings.weight' or name.endswith(suffixes):
+                parameter.mul_(scale)
+                scaled.append(name)
+    return scaled
+
+
+@torch.no_grad()
 def repair_zero_gdn_decay_rates(model):
     """Replace log(0) from BF16 initialization without resampling any weights.
 

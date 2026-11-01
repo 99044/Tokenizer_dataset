@@ -19,7 +19,18 @@ def hybrid_hf_config(settings, vocab_size):
         raise ValueError('Hybrid export supports the base architecture without signals')
     if model['vocab_size'] != vocab_size or settings['training']['dtype'] != 'bfloat16':
         raise ValueError('Hybrid export requires the checkpoint vocabulary and BF16 training')
-    return SubmissionHybridConfig(
+    compressed = model.get('compressed_attention')
+    if compressed is not None:
+        if not isinstance(compressed, dict) or compressed.get('block_size') != 128:
+            raise ValueError('compressed_attention must use 128-token blocks')
+        index = compressed.get('layer_index')
+        if not isinstance(index, int) or not 0 <= index < model['num_layers'] or index % 4 != 3:
+            raise ValueError('compressed_attention must attach to a full-attention layer')
+        if compressed.get('intermediate_size') != model['intermediate_size']:
+            raise ValueError('compressed intermediate size must match model intermediate size')
+        if compressed.get('scale') != 0.001:
+            raise ValueError('compressed attention scale must be 0.001')
+    config = SubmissionHybridConfig(
         vocab_size=vocab_size, hidden_size=model['hidden_size'],
         intermediate_size=model['intermediate_size'], num_hidden_layers=model['num_layers'],
         num_attention_heads=model['num_attention_heads'], num_key_value_heads=model['num_key_value_heads'],
@@ -34,6 +45,8 @@ def hybrid_hf_config(settings, vocab_size):
         linear_value_head_dim=int(model['gdn_head_dim'] * model['gdn_value_expand']),
         linear_conv_kernel_dim=model['gdn_conv_size'], linear_allow_neg_eigval=model['gdn_allow_neg_eigval'],
     )
+    config.compressed_attention = compressed
+    return config
 
 
 def convert_hybrid_state(config, state):
@@ -61,9 +74,14 @@ def convert_hybrid_state(config, state):
         target = f'model.layers.{index}.'
         for suffix, destination in common.items():
             take(source + suffix, target + destination)
+        compressed = getattr(config, 'compressed_attention', None)
+        augmented = compressed is not None and index == compressed['layer_index']
         mixer = 'linear_attn.' if layer_type == 'linear_attention' else 'self_attn.'
+        source_mixer = 'attention.base.' if augmented else 'attention.'
+        if augmented:
+            mixer += 'base.'
         for native, hf in [('w_q', 'q_proj'), ('w_k', 'k_proj'), ('w_v', 'v_proj'), ('w_out', 'o_proj')]:
-            take(source + f'attention.{native}.weight', target + mixer + f'{hf}.weight')
+            take(source + f'{source_mixer}{native}.weight', target + mixer + f'{hf}.weight')
         if layer_type == 'linear_attention':
             for native, hf in [('w_a', 'a_proj'), ('w_b', 'b_proj'), ('w_g', 'g_proj'), ('o_norm', 'o_norm')]:
                 take(source + f'attention.{native}.weight', target + mixer + f'{hf}.weight')
@@ -74,7 +92,11 @@ def convert_hybrid_state(config, state):
             consumed.update(conv_keys)
         else:
             for name in ('q_norm', 'k_norm'):
-                take(source + f'attention.{name}.weight', target + mixer + f'{name}.weight')
+                take(source + f'{source_mixer}{name}.weight', target + mixer + f'{name}.weight')
+        if augmented:
+            for name in ('k_compress', 'v_compress', 'k_up', 'k_down', 'v_up', 'v_down'):
+                take(source + f'attention.compressed.{name}.weight',
+                     target + f'self_attn.compressed.{name}.weight')
     if set(state) != consumed:
         raise ValueError(f'unmapped native Hybrid weights: {sorted(set(state) - consumed)}')
     return converted
