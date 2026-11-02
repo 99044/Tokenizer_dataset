@@ -33,6 +33,10 @@ def main():
         assert training['gradient_accumulation_steps'] == accumulation
         assert actual['optimizer']['name'] == optimizer
         assert actual['optimizer']['learning_rate'] == 0.003
+        if optimizer == 'muon':
+            assert actual['optimizer']['scalar_learning_rate'] == 0.000265
+            assert actual['optimizer']['adjust_lr'] == 'rms_norm'
+            assert 'precondition_frequency' not in actual['optimizer']
         if label == '3e17':
             assert actual['scheduler']['warmup_steps'] == 505
             assert actual['scheduler']['cooldown_steps'] == 3027

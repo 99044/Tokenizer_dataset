@@ -21,7 +21,7 @@ TIERS = (
     ('3e17', 300_000_000_000_000_000, 256, 1984, 2, 4, 'soap', 0.003),
     ('1e18', 1_000_000_000_000_000_000, 640, 2048, 5, 6, 'soap', 0.003),
     ('3e18', 3_000_000_000_000_000_000, 640, 2048, 5, 8, 'soap', 0.003),
-    ('1e19', 10_000_000_000_000_000_000, 1536, 6144, 12, 16, 'soap', 0.003),
+    ('1e19', 10_000_000_000_000_000_000, 1536, 6144, 12, 16, 'muon', 0.003),
 )
 NOMINAL_SIZES = {'3e17': '50m', '1e18': '200m', '3e18': '200m', '1e19': '1.2b'}
 
@@ -85,11 +85,19 @@ def make_config(tier):
         gradient_accumulation_steps=accumulation,
     )
     settings['training'].pop('fp32_master_weights', None)
-    optimizer = dict(
-        name=optimizer_name, learning_rate=lr, betas=[0.95, 0.95],
-        eps=1e-8, weight_decay=0.1,
-    )
-    optimizer.update(precondition_frequency=10, max_precond_dim=1024)
+    if optimizer_name == 'muon':
+        optimizer = dict(
+            name='muon', learning_rate=lr, scalar_learning_rate=0.000265,
+            betas=[0.9, 0.95], eps=1e-8, momentum=0.95,
+            weight_decay=0.1, adjust_lr='rms_norm',
+            expert_wise=True, nesterov=False, use_triton=False,
+        )
+    else:
+        optimizer = dict(
+            name=optimizer_name, learning_rate=lr, betas=[0.95, 0.95],
+            eps=1e-8, weight_decay=0.1,
+            precondition_frequency=10, max_precond_dim=1024,
+        )
     settings['optimizer'] = optimizer
     settings['initialization'] = dict(projection_scale=0.8, repair_gdn_a_log=True)
     if label == '3e17':
