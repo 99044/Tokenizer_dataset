@@ -203,6 +203,7 @@ COMMON=(
   --user "$(id -u):$(id -g)"
   --env HOME=/tmp
   --env PYTHONDONTWRITEBYTECODE=1
+  --env TRITON_F32_DEFAULT=ieee
   --env PYTORCH_KERNEL_CACHE_PATH=/tmp/pytorch-kernel-cache
   --env OMP_NUM_THREADS=1
   --workdir /workspace/comp/scicomp26

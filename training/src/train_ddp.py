@@ -18,6 +18,7 @@ import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from fp32_master import FP32MasterWeights
+from gdn_stability import install_gdn_stability_guard
 from compressed_attention import attach_compressed_attention
 from model_config import build_model_config, count_parameters, tie_output_weights
 from model_initialization import repair_zero_gdn_decay_rates, scale_projections
@@ -356,6 +357,7 @@ def main():
                 raise RuntimeError(f'W&B initialization failed: {wandb_error[0]}')
         dist.barrier()
         run_started = time.perf_counter()
+        gdn_guard = install_gdn_stability_guard(args.output_dir, rank)
 
         for step in range(start_step + 1, stop_step + 1):
             step_started = time.perf_counter()
@@ -366,6 +368,7 @@ def main():
             used_lr = optimizer.param_groups[0]['lr']
             used_group_lrs = [group['lr'] for group in optimizer.param_groups]
             for micro_step in range(args.grad_accum_steps):
+                gdn_guard.set_context(step, micro_step)
                 sync = micro_step == args.grad_accum_steps - 1
                 with nullcontext() if sync else ddp.no_sync():
                     inputs, labels = train.batch(args.micro_batch_size, device)
