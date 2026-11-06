@@ -7,7 +7,7 @@ COMP_DIR="$(dirname -- "$PROJECT_DIR")"
 IMAGE=scicomp26:submission-env-hybrid-v3
 CONFIG=training/configs/FLOPs_3e17.yaml
 STAGE=stage1
-GPUS=0,3
+GPUS=0,1,2,3,4,5,6,7
 STEPS=""
 MICRO_BATCH_SIZE=""
 GRAD_ACCUM_STEPS=""
@@ -42,7 +42,7 @@ Training steps are explicit: dense OLMo3 FLOPs planning does not apply to GDN.
 
   --config PATH       Model YAML inside this repository (default: training/configs/FLOPs_3e17.yaml)
   --stage NAME        stage1 or stage-b (default: stage1)
-  --gpus IDS          Comma-separated host GPU indices (default: 0,3)
+  --gpus IDS          Comma-separated host GPU indices (default: 0,1,2,3,4,5,6,7)
   --steps N           Override training.max_steps (null/missing fallback: 20; no automatic FLOPs certification)
   --micro-batch-size N Override training.micro_batch_size (null/missing fallback: 1)
   --grad-accum-steps N  Override training.gradient_accumulation_steps (null/missing fallback: 1)
@@ -123,7 +123,7 @@ fi
 [[ -n "$DATA_DIR" ]] || fail "Training needs an explicit --data-dir"
 [[ "$DATA_FORMAT" == auto || "$DATA_FORMAT" == packed || "$DATA_FORMAT" == jsonl ]] || fail "--data-format must be auto, packed or jsonl"
 RUN_NAME="${RUN_NAME:-olmo-hybrid-$STAGE-$(date +%Y%m%d-%H%M%S)-$$}"
-[[ "$GPUS" =~ ^[0-9]+(,[0-9]+)*$ ]] || fail "--gpus must look like 0,3"
+[[ "$GPUS" =~ ^[0-9]+(,[0-9]+)*$ ]] || fail "--gpus must look like 0,1,2,3,4,5,6,7"
 for value in "$STEPS" "$MICRO_BATCH_SIZE" "$GRAD_ACCUM_STEPS" "$STOP_AFTER" "$ENCODE_BATCH_SIZE" "$PREPROCESS_THREADS"; do
   [[ -z "$value" || "$value" =~ ^[1-9][0-9]*$ ]] || fail "Steps, tokens and batch sizes must be positive integers"
 done

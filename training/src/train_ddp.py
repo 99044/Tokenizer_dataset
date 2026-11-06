@@ -20,6 +20,14 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from fp32_master import FP32MasterWeights
 from gdn_stability import install_gdn_stability_guard
 from compressed_attention import attach_compressed_attention
+from dual_residual import attach_dual_residual
+from value_residual import attach_value_residual
+from context_curriculum import (
+    curriculum_completed_flops,
+    curriculum_lr_factor,
+    curriculum_stage,
+    validate_curriculum,
+)
 from model_config import build_model_config, count_parameters, tie_output_weights
 from model_initialization import repair_zero_gdn_decay_rates, scale_projections
 from optimizer_factory import build_optimizer
@@ -166,6 +174,15 @@ def main():
         config, context_length, settings = build_model_config(args.config, vocab_size)
         if metadata['context_length'] != context_length:
             raise ValueError('数据 context_length 与模型配置不一致')
+        validate_curriculum(
+            settings, world_size=world, micro_batch_size=args.micro_batch_size,
+            grad_accum_steps=args.grad_accum_steps, max_steps=args.max_steps,
+        )
+        has_curriculum = curriculum_stage(settings, 1) is not None
+        if has_curriculum and args.branch_from:
+            raise ValueError('上下文课程支持从头训练或 --resume，不能使用 --branch-from')
+        if has_curriculum and args.warmup_steps != settings['scheduler']['warmup_steps']:
+            raise ValueError('上下文课程按配置的累计 FLOPs 调度，不能覆盖 --warmup-steps')
         seed = settings['run']['seed']
         torch.manual_seed(seed)
         config.init_seed = seed
@@ -177,6 +194,15 @@ def main():
             model, float(settings.get('initialization', {}).get('projection_scale', 1.0))
         )
         compressed_parameters = attach_compressed_attention(model, settings, device)
+        attach_dual_residual(model, settings)
+        attach_value_residual(model, settings)
+        residual_parameters = sum(
+            parameter.numel() for name, parameter in model.named_parameters()
+            if '.dual_residual_mixing.' in name
+        )
+        expected_residual = settings.get('scaling', {}).get('additional_residual_parameters')
+        if expected_residual is not None and residual_parameters != expected_residual:
+            raise ValueError(f'residual parameters {residual_parameters} != {expected_residual}')
         expected_parameters = settings.get('scaling', {}).get('expected_total_parameters')
         if expected_parameters is not None and count_parameters(model) != expected_parameters:
             raise ValueError(f'model parameter count {count_parameters(model)} != {expected_parameters}')
@@ -184,8 +210,10 @@ def main():
         if expected_branch is not None and compressed_parameters != expected_branch:
             raise ValueError(f'compressed branch parameters {compressed_parameters} != {expected_branch}')
         use_fp32_master = bool(settings['training'].get('fp32_master_weights', False))
-        if use_fp32_master and settings['optimizer']['name'] != 'adamw':
-            raise ValueError('FP32 master weights currently require AdamW')
+        if use_fp32_master and settings['optimizer']['name'].lower() not in {'adamw', 'soap'}:
+            raise ValueError('FP32 master weights require AdamW or SOAP')
+        # DDP broadcasts initial weights before their FP32 copies are created.
+        ddp = DDP(model, device_ids=[local_rank], broadcast_buffers=False)
         master_weights = FP32MasterWeights(model) if use_fp32_master else None
         optimizer, optimizer_report = build_optimizer(
             model,
@@ -195,16 +223,17 @@ def main():
         )
         if master_weights is not None:
             optimizer = master_weights.install(optimizer)
+            optimizer_report['fp32_master_weights'] = True
 
         scheduler_settings = settings['scheduler']
         scheduler_name = scheduler_settings['name']
         cooldown_steps = int(scheduler_settings.get('cooldown_steps') or 0)
-        if scheduler_name not in {'constant', 'cosine', 'linear_cooldown'}:
+        if not has_curriculum and scheduler_name not in {'constant', 'cosine', 'linear_cooldown'}:
             raise ValueError(f'不支持的 scheduler.name: {scheduler_name!r}')
         continuation = settings.get('continuation')
         if continuation and not (args.branch_from or args.resume):
             raise ValueError('continuation 配置必须使用 --branch-from，或用 --resume 恢复其自身 checkpoint')
-        if scheduler_name == 'linear_cooldown':
+        if not has_curriculum and scheduler_name == 'linear_cooldown':
             if cooldown_steps <= 0 or cooldown_steps >= args.max_steps:
                 raise ValueError('linear_cooldown 要求 0 < cooldown_steps < max_steps')
             if isinstance(continuation, dict):
@@ -221,10 +250,12 @@ def main():
             final_lr_ratio = float(scheduler_settings.get('final_lr_ratio', 0.0))
             if not 0.0 <= final_lr_ratio < 1.0:
                 raise ValueError('scheduler.final_lr_ratio 必须在 [0, 1)')
-        elif cooldown_steps:
+        elif not has_curriculum and cooldown_steps:
             raise ValueError('cooldown_steps 只能与 linear_cooldown 一起使用')
 
         def lr_factor(completed):
+            if has_curriculum:
+                return curriculum_lr_factor(settings, completed)
             if completed < args.warmup_steps:
                 return (completed + 1) / args.warmup_steps
             if scheduler_name == 'linear_cooldown':
@@ -251,6 +282,12 @@ def main():
         if args.resume:
             if checkpoint['plan'] != plan:
                 raise ValueError('恢复时 GPU 数量、训练计划、配置与数据 metadata 必须一致')
+            if has_curriculum and checkpoint.get('completed_flops') != curriculum_completed_flops(
+                settings, checkpoint['step']
+            ):
+                raise ValueError('课程 checkpoint 的累计 FLOPs 与训练进度不一致')
+            if master_weights is not None:
+                master_weights.validate_checkpoint(checkpoint)
             model.load_state_dict(checkpoint['model'], strict=True)
             optimizer.load_state_dict(checkpoint['optimizer'])
             if master_weights is not None:
@@ -261,6 +298,8 @@ def main():
             del checkpoint
         elif args.branch_from:
             continuation = validate_branch_checkpoint(checkpoint, settings, metadata, plan)
+            if master_weights is not None:
+                master_weights.validate_checkpoint(checkpoint)
             model.load_state_dict(checkpoint['model'], strict=True)
             optimizer.load_state_dict(checkpoint['optimizer'])
             if master_weights is not None:
@@ -278,11 +317,11 @@ def main():
         if start_step >= stop_step:
             raise ValueError('恢复位置已经达到 stop-after/max-steps，请检查训练计划')
 
-        ddp = DDP(model, device_ids=[local_rank], broadcast_buffers=False)
         if resumed_rng:
             torch.set_rng_state(resumed_rng['cpu'])
             torch.cuda.set_rng_state(resumed_rng['cuda'], device=device)
         train = PackedTokenSampler(args.data_dir / 'train.npy', context_length, vocab_size, seed + rank, metadata)
+        train_samplers = {context_length: train}
         validation = PackedTokenSampler(args.data_dir / 'validation.npy', context_length, vocab_size, seed + rank, metadata)
         global_batch = world * args.micro_batch_size * args.grad_accum_steps
         tokens_per_step = global_batch * context_length
@@ -324,6 +363,8 @@ def main():
 
                 runtime_metadata = runtime_graph_metadata(model)
                 runtime_metadata['compressed_branch_parameters'] = compressed_parameters
+                if residual_parameters:
+                    runtime_metadata['residual_parameters'] = residual_parameters
                 runtime_metadata.update(first_optimizer_step=start_step + 1, planned_stop_step=stop_step)
                 runtime_path = args.output_dir / f'runtime_graph-start-{start_step + 1}.json'
                 runtime_path.write_text(json.dumps(runtime_metadata, indent=2, ensure_ascii=False) + '\n')
@@ -361,21 +402,30 @@ def main():
 
         for step in range(start_step + 1, stop_step + 1):
             step_started = time.perf_counter()
+            stage = curriculum_stage(settings, step)
+            sequence_length = context_length if stage is None else stage['length']
+            micro_batch_size = args.micro_batch_size if stage is None else stage['micro_batch_size']
+            grad_accum_steps = args.grad_accum_steps if stage is None else stage['grad_accum_steps']
+            if sequence_length not in train_samplers:
+                train_samplers[sequence_length] = PackedTokenSampler(
+                    args.data_dir / 'train.npy', sequence_length, vocab_size, seed + rank, metadata,
+                )
+            train = train_samplers[sequence_length]
             # 可由 seed/step/rank 重建采样位置，恢复时不需要保存 NumPy 状态。
             train.rng = np.random.default_rng(np.random.SeedSequence([seed, step, rank]))
             optimizer.zero_grad(set_to_none=True)
             local_loss = torch.zeros((), device=device)
-            used_lr = optimizer.param_groups[0]['lr']
-            used_group_lrs = [group['lr'] for group in optimizer.param_groups]
-            for micro_step in range(args.grad_accum_steps):
+            used_lr = float(optimizer.param_groups[0]['lr'])
+            used_group_lrs = [float(group['lr']) for group in optimizer.param_groups]
+            for micro_step in range(grad_accum_steps):
                 gdn_guard.set_context(step, micro_step)
-                sync = micro_step == args.grad_accum_steps - 1
+                sync = micro_step == grad_accum_steps - 1
                 with nullcontext() if sync else ddp.no_sync():
-                    inputs, labels = train.batch(args.micro_batch_size, device)
+                    inputs, labels = train.batch(micro_batch_size, device)
                     logits = ddp(inputs)
                     loss = F.cross_entropy(logits.float().reshape(-1, vocab_size), labels.reshape(-1))
-                    (loss / args.grad_accum_steps).backward()
-                    local_loss += loss.detach() / args.grad_accum_steps
+                    (loss / grad_accum_steps).backward()
+                    local_loss += loss.detach() / grad_accum_steps
                 del inputs, labels, logits, loss
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             if not torch.isfinite(grad_norm).item():
@@ -399,6 +449,17 @@ def main():
             }
             for index, group in enumerate(optimizer_report['groups']):
                 metrics[f"lr/{group['name']}"] = used_group_lrs[index]
+            stage_boundary = False
+            if stage is not None:
+                metrics.update({
+                    'train/context_length': sequence_length,
+                    'train/micro_batch_size': micro_batch_size,
+                    'train/grad_accum_steps': grad_accum_steps,
+                    'train/curriculum_stage': stage['stage'],
+                    'train/curriculum_stage_index': stage['stage_index'],
+                    'train/completed_flops': curriculum_completed_flops(settings, step),
+                })
+                stage_boundary = step == stage['last_step']
             if step % args.eval_every == 0 or step in eval_steps or step == stop_step:
                 eval_batches = args.eval_batches
                 if step == args.max_steps:
@@ -422,7 +483,7 @@ def main():
                 if wandb_run is not None:
                     wandb_run.log(metrics, step=step)
 
-            if step % args.save_every == 0 or step in checkpoint_steps or step == stop_step:
+            if step % args.save_every == 0 or step in checkpoint_steps or step == stop_step or stage_boundary:
                 rng = {'cpu': torch.get_rng_state(), 'cuda': torch.cuda.get_rng_state(device)}
                 all_rng = [None] * world
                 dist.all_gather_object(all_rng, rng)
@@ -435,6 +496,11 @@ def main():
                     )
                     if master_weights is not None:
                         checkpoint_payload['fp32_master'] = master_weights.state_dict()
+                    if stage is not None:
+                        checkpoint_payload.update(
+                            completed_flops=curriculum_completed_flops(settings, step),
+                            curriculum_stage=stage['stage'], sequence_length=sequence_length,
+                        )
                     torch.save(checkpoint_payload, temporary)
                     temporary.replace(path)
                     keep_last = settings.get('logging', {}).get('checkpoint_keep_last')

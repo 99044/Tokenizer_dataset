@@ -7,7 +7,9 @@ import torch.nn.functional as F
 
 
 def hybrid_hf_config(settings, vocab_size):
-    from hf_hybrid import SubmissionHybridConfig
+    from hf_hybrid import (
+        SubmissionHybridConfig, validate_dual_residual_spec, validate_value_residual_spec,
+    )
 
     model = settings['model']
     # Reuse the source-bound accounting preset's architecture checks without
@@ -47,6 +49,10 @@ def hybrid_hf_config(settings, vocab_size):
         linear_conv_kernel_dim=model['gdn_conv_size'], linear_allow_neg_eigval=model['gdn_allow_neg_eigval'],
     )
     config.compressed_attention = compressed
+    config.value_residual = validate_value_residual_spec(model.get('value_residual'))
+    config.dual_residual = validate_dual_residual_spec(
+        model.get('dual_residual'), num_layers=model['num_layers'],
+    )
     return config
 
 
@@ -75,6 +81,11 @@ def convert_hybrid_state(config, state):
         target = f'model.layers.{index}.'
         for suffix, destination in common.items():
             take(source + suffix, target + destination)
+        dual = getattr(config, 'dual_residual', None)
+        if dual is not None and index >= dual['start_layer']:
+            take(source + 'dual_residual_mixing.post_logits', target + 'dual_residual_mixing.post_logits')
+            if index == config.num_hidden_layers - 1:
+                take(source + 'dual_residual_mixing.merge_logits', target + 'dual_residual_mixing.merge_logits')
         compressed = getattr(config, 'compressed_attention', None)
         augmented = compressed is not None and index == compressed['layer_index']
         mixer = 'linear_attn.' if layer_type == 'linear_attention' else 'self_attn.'
@@ -112,7 +123,14 @@ class NativeHybridCPUReference(nn.Module):
 
     def __init__(self, settings, state):
         super().__init__()
+        from value_residual import validate_value_residual_spec
+        from dual_residual import validate_dual_residual_spec
+
         self.settings = settings['model']
+        self.value_residual = validate_value_residual_spec(self.settings.get('value_residual'))
+        self.dual_residual = validate_dual_residual_spec(
+            self.settings.get('dual_residual'), num_layers=self.settings['num_layers'],
+        )
         for name, tensor in state.items():
             parent = self
             parts = name.split('.')
@@ -159,9 +177,16 @@ class NativeHybridCPUReference(nn.Module):
         y = (y * state[prefix + 'o_norm.weight'].float() * F.silu(gate.float())).to(x.dtype)
         return F.linear(y.flatten(2), state[prefix + 'w_out.weight'])
 
-    def attention(self, x, state, prefix):
+    def attention(self, x, state, prefix, first_value=None):
         cfg = self.settings
         q, k, v = [F.linear(x, state[prefix + f'w_{name}.weight']) for name in ('q', 'k', 'v')]
+        current_value = v
+        if self.value_residual is not None and first_value is not None:
+            weight = self.value_residual['first_layer_weight']
+            if weight == 1.0:
+                v = first_value + 0.0 * v
+            elif weight != 0.0:
+                v = (1.0 - weight) * v + weight * first_value
         q, k = [self.norm(y, state[prefix + f'{name}_norm.weight'], cfg['rms_norm_eps'])
                 for name, y in [('q', q), ('k', k)]]
         head_dim = cfg['attention_head_dim']
@@ -172,16 +197,74 @@ class NativeHybridCPUReference(nn.Module):
             left, right = y.float().chunk(2, dim=-1)
             return (y.float() * positions.cos() + torch.cat((-right, left), dim=-1) * positions.sin()).to(y.dtype)
         y = F.scaled_dot_product_attention(rotate(q), rotate(k), v, is_causal=True)
-        return F.linear(y.transpose(1, 2).flatten(2), state[prefix + 'w_out.weight'])
+        return F.linear(y.transpose(1, 2).flatten(2), state[prefix + 'w_out.weight']), current_value
+
+    def compressed_attention(self, x, state, prefix, spec):
+        """Independent expression of the unchanged causal compressed branch."""
+        batch, length, width = x.shape
+        blocks = length // spec['block_size']
+        if not blocks:
+            return torch.zeros_like(x)
+        packed = x[:, :blocks * spec['block_size']].reshape(batch, blocks, -1)
+        key = F.linear(packed, state[prefix + 'k_compress.weight'])
+        value = F.linear(packed, state[prefix + 'v_compress.weight'])
+        key = key + F.linear(F.silu(F.linear(key, state[prefix + 'k_up.weight'])),
+                             state[prefix + 'k_down.weight'])
+        value = value + F.linear(F.silu(F.linear(value, state[prefix + 'v_up.weight'])),
+                                 state[prefix + 'v_down.weight'])
+        heads = self.settings['num_attention_heads']
+        head_dim = width // heads
+        query = x.reshape(batch, length, heads, head_dim).transpose(1, 2)
+        key = key.reshape(batch, blocks, heads, head_dim).transpose(1, 2)
+        value = value.reshape(batch, blocks, heads, head_dim).transpose(1, 2)
+        key = torch.cat((torch.zeros_like(key[:, :, :1]), key), dim=2)
+        value = torch.cat((torch.zeros_like(value[:, :, :1]), value), dim=2)
+        token_end = torch.arange(length, device=x.device)[:, None] + 1
+        block_end = torch.arange(blocks + 1, device=x.device)[None, :] * spec['block_size']
+        y = F.scaled_dot_product_attention(query, key, value, attn_mask=block_end <= token_end,
+                                           dropout_p=0.0, is_causal=False)
+        return y.transpose(1, 2).contiguous().reshape(batch, length, width)
 
     def forward(self, inputs):
-        state = self.state_dict()
+        state = self.state_dict(keep_vars=True)
         cfg = self.settings
         x = F.embedding(inputs, state['embeddings.weight'])
+        first_value = None
+        lane1 = None
+        compressed = cfg.get('compressed_attention')
         for index in range(cfg['num_layers']):
             prefix = f'blocks.{index}.'
-            fn = self.delta if cfg['block_pattern'][index % 4] == 'gdn' else self.attention
-            x = x + self.norm(fn(x, state, prefix + 'attention.'), state[prefix + 'attention_norm.weight'], cfg['rms_norm_eps'])
-            ffn = F.silu(F.linear(x, state[prefix + 'feed_forward.w1.weight'])) * F.linear(x, state[prefix + 'feed_forward.w3.weight'])
-            x = x + self.norm(F.linear(ffn, state[prefix + 'feed_forward.w2.weight']), state[prefix + 'feed_forward_norm.weight'], cfg['rms_norm_eps'])
+            if cfg['block_pattern'][index % len(cfg['block_pattern'])] == 'gdn':
+                mixed = self.delta(x, state, prefix + 'attention.')
+            else:
+                augmented = compressed is not None and index == compressed['layer_index']
+                attention_prefix = prefix + ('attention.base.' if augmented else 'attention.')
+                mixed, current_value = self.attention(x, state, attention_prefix, first_value)
+                if self.value_residual is not None and first_value is None:
+                    first_value = current_value
+                if augmented:
+                    mixed = mixed + compressed['scale'] * self.compressed_attention(
+                        x, state, prefix + 'attention.compressed.', compressed)
+            attention = self.norm(mixed, state[prefix + 'attention_norm.weight'], cfg['rms_norm_eps'])
+            dual_active = self.dual_residual is not None and index >= self.dual_residual['start_layer']
+            if dual_active:
+                if index == self.dual_residual['start_layer']:
+                    lane1 = x
+                ffn_input = lane1
+            else:
+                x = x + attention
+                ffn_input = x
+            ffn = F.silu(F.linear(ffn_input, state[prefix + 'feed_forward.w1.weight'])) * F.linear(ffn_input, state[prefix + 'feed_forward.w3.weight'])
+            feed_forward = self.norm(F.linear(ffn, state[prefix + 'feed_forward.w2.weight']), state[prefix + 'feed_forward_norm.weight'], cfg['rms_norm_eps'])
+            if dual_active:
+                weights = (2.0 * state[prefix + 'dual_residual_mixing.post_logits'].float().softmax(-1)).to(x.dtype)
+                update0 = weights[0, 0] * attention + weights[0, 1] * feed_forward
+                update1 = weights[1, 0] * attention + weights[1, 1] * feed_forward
+                x = x + update0
+                lane1 = lane1 + update1
+                if index == cfg['num_layers'] - 1:
+                    merge = state[prefix + 'dual_residual_mixing.merge_logits'].float().softmax(-1).to(x.dtype)
+                    x = merge[0] * x + merge[1] * lane1
+            else:
+                x = x + feed_forward
         return F.linear(self.norm(x, state['lm_head.norm.weight'], cfg['rms_norm_eps']), state['lm_head.w_out.weight'])

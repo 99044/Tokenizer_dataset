@@ -10,6 +10,8 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 
+from compressed_attention import CompressedKVBranch
+
 
 @dataclass(frozen=True)
 class NamedParameterGroup:
@@ -38,10 +40,14 @@ def _positive_float(value: Any, field: str, *, allow_zero: bool = False) -> floa
 
 def _matrix_and_scalar_parameters(
     model: nn.Module,
+    excluded_parameter_ids: frozenset[int] = frozenset(),
 ) -> tuple[tuple[tuple[str, nn.Parameter], ...], tuple[tuple[str, nn.Parameter], ...]]:
     """Separate internal matrices from embedding, output, convolution and vectors."""
 
-    named = tuple((name, parameter) for name, parameter in model.named_parameters() if parameter.requires_grad)
+    named = tuple(
+        (name, parameter) for name, parameter in model.named_parameters()
+        if parameter.requires_grad and id(parameter) not in excluded_parameter_ids
+    )
     if not named:
         raise ValueError("model has no trainable parameters")
 
@@ -127,9 +133,27 @@ def build_optimizer(
     if len(betas) != 2 or any(not 0 <= value < 1 for value in betas):
         raise ValueError("optimizer.betas must contain two values in [0, 1)")
     eps = _positive_float(config["eps"], "eps")
+    compressed_algorithm = config.get("compressed_branch")
+    if compressed_algorithm not in {None, "adamw"}:
+        raise ValueError("optimizer.compressed_branch must be adamw when specified")
+    compressed_ids = frozenset()
+    if compressed_algorithm == "adamw":
+        compressed_ids = frozenset(
+            id(parameter)
+            for module in model.modules() if isinstance(module, CompressedKVBranch)
+            for parameter in module.parameters() if parameter.requires_grad
+        )
     named = tuple(
         (name, parameter_map[id(parameter)] if parameter_map is not None else parameter)
         for name, parameter in model.named_parameters() if parameter.requires_grad
+    )
+    compressed = tuple(
+        (parameter_name, parameter_map[id(parameter)] if parameter_map is not None else parameter)
+        for parameter_name, parameter in model.named_parameters()
+        if id(parameter) in compressed_ids
+    )
+    compressed_group = NamedParameterGroup(
+        "compressed", "adamw", primary_lr, weight_decay, compressed
     )
 
     if name == "adamw":
@@ -144,7 +168,7 @@ def build_optimizer(
         return optimizer, _report(name, [group])
 
     if name in {"muon", "normuon"}:
-        matrix, scalar = _matrix_and_scalar_parameters(model)
+        matrix, scalar = _matrix_and_scalar_parameters(model, compressed_ids)
         scalar_lr = _positive_float(config["scalar_learning_rate"], "scalar_learning_rate")
         adjust_lr = config.get("adjust_lr")
         if adjust_lr != "rms_norm":
@@ -174,6 +198,14 @@ def build_optimizer(
                 "weight_decay": weight_decay,
             },
         ]
+        if compressed:
+            groups.append(compressed_group)
+            parameter_groups.append({
+                "params": [parameter for _, parameter in compressed],
+                "algorithm": "adamw",
+                "lr": primary_lr,
+                "weight_decay": weight_decay,
+            })
         optimizer_kwargs = {
             "distributed_mesh": dist.group.WORLD if dist.is_initialized() else None,
             "lr": primary_lr,
@@ -200,9 +232,16 @@ def build_optimizer(
         max_precond_dim = int(config.get("max_precond_dim", 1024))
         if precondition_frequency <= 0 or max_precond_dim <= 0:
             raise ValueError("SOAP precondition_frequency and max_precond_dim must be positive")
-        group = NamedParameterGroup("all", "soap", primary_lr, weight_decay, named)
+        compressed_optimizer_ids = {id(parameter) for _, parameter in compressed}
+        ordinary = tuple(
+            (parameter_name, parameter) for parameter_name, parameter in named
+            if id(parameter) not in compressed_optimizer_ids
+        )
+        group = NamedParameterGroup(
+            "ordinary" if compressed else "all", "soap", primary_lr, weight_decay, ordinary
+        )
         optimizer = SOAP(
-            [parameter for _, parameter in named],
+            [parameter for _, parameter in ordinary],
             lr=primary_lr,
             betas=betas,
             eps=eps,
@@ -214,6 +253,18 @@ def build_optimizer(
             normalize_grads=False,
             correct_bias=True,
         )
+        if compressed:
+            from combined_optimizer import CombinedOptimizer
+
+            compressed_optimizer = torch.optim.AdamW(
+                [parameter for _, parameter in compressed],
+                lr=primary_lr,
+                betas=betas,
+                eps=eps,
+                weight_decay=weight_decay,
+            )
+            optimizer = CombinedOptimizer(optimizer, compressed_optimizer)
+            return optimizer, _report(name, [group, compressed_group])
         return optimizer, _report(name, [group])
 
     raise ValueError(f"unsupported optimizer: {name!r}")

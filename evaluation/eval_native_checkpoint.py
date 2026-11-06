@@ -36,6 +36,45 @@ def file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def checkpoint_training_progress(checkpoint):
+    """Read the saved training topology and variable-length compute schedule."""
+    from context_curriculum import curriculum_completed_flops, validate_curriculum
+
+    plan = checkpoint['plan']
+    settings = plan['settings']
+    step = int(checkpoint['step'])
+    if not 0 < step <= int(plan['max_steps']):
+        raise ValueError('checkpoint step is outside its training plan')
+    tokens_per_update = (
+        int(plan['world_size']) * int(plan['micro_batch_size'])
+        * int(plan['grad_accum_steps']) * settings['model']['context_length']
+    )
+    curriculum = settings['training'].get('length_curriculum')
+    if curriculum is not None:
+        validate_curriculum(settings, plan['world_size'], plan['micro_batch_size'],
+                            plan['grad_accum_steps'], plan['max_steps'])
+        flops = curriculum_completed_flops(settings, step)
+        if checkpoint.get('completed_flops') != flops:
+            raise ValueError('checkpoint completed FLOPs differ from the curriculum')
+        return step * tokens_per_update, flops
+    budget = settings.get('budget')
+    flops = None
+    if isinstance(budget, dict) and budget.get('total_training_flops') is not None:
+        full_run_flops = int(budget.get('planned_training_flops', budget['total_training_flops']))
+        value = Fraction(full_run_flops, int(plan['max_steps'])) * step
+        if value.denominator != 1:
+            raise ValueError('checkpoint FLOPs are not integral under the stored run plan')
+        flops = value.numerator
+    return step * tokens_per_update, flops
+
+
+def checkpoint_primary_learning_rate(checkpoint):
+    optimizer = checkpoint['optimizer']
+    if optimizer.get('kind') == 'soap_adamw':
+        optimizer = optimizer['optimizers'][0]
+    return float(optimizer['param_groups'][0]['lr'])
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset-path", type=Path, required=True, help="JSONL with a text field")
@@ -60,6 +99,9 @@ def main():
     from transformers import AutoTokenizer
 
     from model_config import build_model_config, count_parameters, tie_output_weights
+    from compressed_attention import attach_compressed_attention
+    from dual_residual import attach_dual_residual
+    from value_residual import attach_value_residual
     from training_data import data_vocab_size
 
     if "LOCAL_RANK" not in os.environ:
@@ -81,7 +123,8 @@ def main():
         settings = plan["settings"]
         optimizer_settings = settings["optimizer"]
         peak_learning_rate = float(optimizer_settings["learning_rate"])
-        checkpoint_learning_rate = float(checkpoint["optimizer"]["param_groups"][0]["lr"])
+        checkpoint_learning_rate = checkpoint_primary_learning_rate(checkpoint)
+        training_tokens, flops_at_checkpoint = checkpoint_training_progress(checkpoint)
         if settings["model"]["type"] not in {"olmo_hybrid_1b", "olmo_hybrid_scaling"}:
             raise ValueError("native BPB evaluation supports the OLMo Hybrid family")
         vocab_size = data_vocab_size(plan["data"])
@@ -118,28 +161,14 @@ def main():
                 Path(config_file.name), vocab_size
             )
         model = model_config.build(init_device="meta")
+        attach_compressed_attention(model, settings, torch.device('meta'))
+        attach_dual_residual(model, settings)
+        attach_value_residual(model, settings)
         model.load_state_dict(checkpoint["model"], strict=True, assign=True)
         tie_output_weights(model)
         model = model.to(device).eval()
         parameters = count_parameters(model)
         nonembedding_parameters = parameters - settings["model"]["hidden_size"] * vocab_size
-        tokens_per_update = (
-            int(plan["world_size"])
-            * int(plan["micro_batch_size"])
-            * int(plan["grad_accum_steps"])
-            * sequence_length
-        )
-        training_tokens = checkpoint_step * tokens_per_update
-        budget = settings.get("budget")
-        flops_at_checkpoint = None
-        if isinstance(budget, dict) and budget.get("total_training_flops") is not None:
-            full_run_flops = int(
-                budget.get("planned_training_flops", budget["total_training_flops"])
-            )
-            checkpoint_flops = Fraction(full_run_flops, int(plan["max_steps"])) * checkpoint_step
-            if checkpoint_flops.denominator != 1:
-                raise ValueError("checkpoint FLOPs are not integral under the stored run plan")
-            flops_at_checkpoint = checkpoint_flops.numerator
         del checkpoint
 
         num_sequences = math.ceil((len(tokens) - 1) / sequence_length)

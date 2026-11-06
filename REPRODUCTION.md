@@ -4,12 +4,26 @@
 
 | 配置 | 总参数 | hidden | FFN | heads | 优化器 | 步数 | tokens/update | 计划训练 tokens |
 | --- | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: |
-| `FLOPs_3e17.yaml` | 47,756,772 | 256 | 1984 | 2 | SOAP | 10,090 | 131,072 | 1,322,516,480 |
-| `FLOPs_1e18.yaml` | 200,197,018 | 640 | 2048 | 5 | SOAP | 7,512 | 196,608 | 1,476,919,296 |
-| `FLOPs_3e18.yaml` | 200,197,018 | 640 | 2048 | 5 | SOAP | 16,902 | 262,144 | 4,430,757,888 |
+| `FLOPs_3e17.yaml` | 47,756,790 | 256 | 1984 | 2 | SOAP | 5,502 | 262,144 | 1,442,316,288 |
+| `FLOPs_1e18.yaml` | 200,197,018 | 640 | 2048 | 5 | SOAP | 8,072 | 196,608 | 1,587,019,776 |
+| `FLOPs_3e18.yaml` | 200,197,018 | 640 | 2048 | 5 | SOAP | 18,162 | 262,144 | 4,761,059,328 |
 | `FLOPs_1e19.yaml` | 1,175,476,632 | 1536 | 6144 | 12 | Muon | 5,346 | 524,288 | 2,802,843,648 |
 
-实际步数和 token 以 YAML 的 `training` 与 `budget` 字段为准。四档按 4 卡 DDP、每卡 micro batch 1 配置，梯度累积分别为 4、6、8、16。模型使用 BF16，前三档采用 SOAP，1e19 档采用 Muon；峰值学习率为 0.003。3e17 档采用约 5% warmup、保持峰值学习率到 70% 进度、最后 30% 线性降至 3e-5；其余三档仍为 20 步 warmup、最后约 16.7% 线性降至 0。初始化时主干指定投影和 embedding 权重乘以 0.8；压缩分支的输出另乘对应 YAML 中的系数。每档训练进度约每 10% 保存一次，自动只保留最近两个完整 checkpoint。中断后用相同 YAML、数据和 GPU 数量传 `--resume` 继续。1e19 档更换优化器后必须从头训练，不能加载旧 SOAP checkpoint。
+实际步数和 token 以 YAML 的 `training` 与 `budget` 字段为准。四档按 8 卡 DDP 配置，梯度累积分别为 4、3、4、8。8192 上下文时每卡 micro batch 为 1。模型使用 BF16 计算，前三档主干采用 SOAP，1e19 档主干采用 Muon，四档压缩分支均采用 AdamW，峰值学习率为 0.003。3e17 档采用约 5% warmup、保持峰值学习率到 70% 进度、最后 30% 线性降至 3e-5。1e19 档采用 20 步 warmup、最后约 16.7% 线性降至 0。初始化时主干指定投影和 embedding 权重乘以 0.8，压缩分支的输出另乘对应 YAML 中的系数。每档训练进度约每 10% 保存一次，自动只保留最近两个完整 checkpoint。中断后用相同 YAML、数据和 GPU 数量传 `--resume` 继续。1e19 档更换优化器后必须从头训练。
+
+3e17 采用 `scicomp26-small_model_opt_E16_dual_length_fp32_4gpu_20261107` 的策略。第 9 至 12 层使用持续双流残差，初始交叉混合比例为 0.25，每行总增益为 2，末层初始合并权重各为 0.5。第 8、12 层 Attention 将当前 V 与第 4 层 V 按各 0.5 混合，梯度回传至第 4 层。新增 18 个 FP32 混合参数，与全部可训练参数一起纳入 FP32 主权重和优化器。训练、原生评测及 HF 导出均加载这两项结构。8 卡配置每次更新 262144 tokens，梯度累积为 4，学习率按累计 FLOPs 推进，采用现有生成器取整得到的 `253 / 5045` warmup 比例和 `1514 / 5045` cooldown 比例。新结构从头训练，后续使用同一计划的 checkpoint 续训。
+
+1e18 和 3e18 采用 `scicomp26-small_model_opt_E15_fp32_4gpu_20261106` 的短到长上下文课程与 FP32 主权重策略，并按各自模型、预算和 8 卡配置重新计算计划。前三档课程依次把约 50%、20%、30% 的 FLOPs 预算用于 2048、4096、8192 上下文，每卡 micro batch 依次为 4、2、1，每次更新的总 token 数固定。全部可训练参数保留 FP32 主权重，SOAP 和 AdamW 在主权重上更新，随后回写计算权重。
+
+| 档位 | 2048 阶段步数 | 4096 阶段步数 | 8192 阶段步数 | 梯度累积 | 计划 FLOPs |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 3e17 | 2,887 | 1,101 | 1,514 | 4 | 296,981,168,907,986,688 |
+| 1e18 | 4,202 | 1,616 | 2,254 | 3 | 989,896,105,748,962,176 |
+| 3e18 | 9,454 | 3,637 | 5,071 | 4 | 2,969,685,208,764,306,048 |
+
+这两档学习率按累计 FLOPs 推进，warmup 和 cooldown 比例沿用各自原计划的 `20 / 原总步数` 与 `原 cooldown 步数 / 原总步数`，峰值为 0.003，最终降至 0。验证始终使用 8192 上下文。阶段结束会保存完整 checkpoint，恢复时核对课程计划、累计 FLOPs、FP32 主权重及其对应的 BF16 权重。新课程从头启动，后续通过 `--resume` 恢复同一课程的 checkpoint。短程检查可使用 `--stop-after`。
+
+课程预算沿用 E15 的解析估计，以原 8192 上下文 ledger 为基准扣除随长度变化的 Attention GEMM 成本。3e17 另按 E16 为双流残差及 Value Residual 加入每 token 75264 FLOPs 的前向与反向保守额度。softmax 和 GDN 边界项沿用基准估计，优化器更新、FP32 权重复制、通信及重计算开销需单独评估。原计划约 1% 的预算余量已保留。3e17 的双流和 Value Residual 使用完整序列前向，训练时采用 eager 执行，推理时设置 `use_cache=False`。
 
 需要在进程意外退出后自动续训时，用 `training/src/auto_resume.sh` 包住原来的启动命令，并保持固定的 `--run-name` 和 `--runs-dir`。例如 1e19 档：
 
@@ -20,7 +34,7 @@ mkdir -p "$RUNS_DIR"
 nohup bash training/src/auto_resume.sh \
   --run-dir "$RUNS_DIR/$RUN_NAME" --max-steps 5346 -- \
   bash training/src/start_train.sh \
-    --config training/configs/FLOPs_1e19.yaml --gpus 0,1,2,3 \
+    --config training/configs/FLOPs_1e19.yaml --gpus 0,1,2,3,4,5,6,7 \
     --data-dir /path/to/token-cache --data-format packed \
     --run-name "$RUN_NAME" --runs-dir "$RUNS_DIR" \
   > "$RUNS_DIR/$RUN_NAME.watchdog.log" 2>&1 < /dev/null &
@@ -34,7 +48,7 @@ nohup bash training/src/auto_resume.sh \
 
 ```bash
 bash training/train.sh --image scicomp26:submission-env-hybrid-v3 \
-  --config training/configs/FLOPs_3e17.yaml --stage stage1 --gpus 0,1,2,3 \
+  --config training/configs/FLOPs_3e17.yaml --stage stage1 --gpus 0,1,2,3,4,5,6,7 \
   --data-dir /path/to/24k-tokenized-data --data-format packed \
   --run-name submission_20261103_3e17
 ```

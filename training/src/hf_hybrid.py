@@ -6,6 +6,10 @@ CPU uses Transformers' PyTorch GDN reference. GPU evaluation uses no cache.
 This file is copied into each export by register_for_auto_class().
 """
 
+import math
+import inspect
+from types import MethodType
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -21,6 +25,7 @@ from transformers.models.olmo_hybrid.modeling_olmo_hybrid import (
     OlmoHybridRotaryEmbedding,
     apply_mask_to_padding_states,
     eager_attention_forward,
+    torch_chunk_gated_delta_rule,
 )
 from transformers.modeling_layers import GradientCheckpointingLayer
 from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
@@ -28,6 +33,141 @@ from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
 
 class SubmissionHybridConfig(OlmoHybridConfig):
     model_type = 'scicomp26_olmo_hybrid'
+
+
+def validate_value_residual_spec(spec):
+    """Standalone parser: this file must also load from an offline HF export."""
+    if spec is None:
+        return None
+    if not isinstance(spec, dict):
+        raise ValueError('model.value_residual must be a mapping')
+    unknown = set(spec) - {'enabled', 'first_layer_weight'}
+    if unknown:
+        raise ValueError(f'unknown value_residual fields: {sorted(unknown)}')
+    enabled = spec.get('enabled', True)
+    if not isinstance(enabled, bool):
+        raise ValueError('value_residual.enabled must be boolean')
+    weight = spec.get('first_layer_weight', 0.5)
+    if isinstance(weight, bool) or not isinstance(weight, (int, float)) or not math.isfinite(weight) or not 0 <= weight <= 1:
+        raise ValueError('value_residual.first_layer_weight must be finite and in [0, 1]')
+    return {'enabled': True, 'first_layer_weight': float(weight)} if enabled else None
+
+
+def validate_dual_residual_spec(spec, *, num_layers):
+    """Keep exported configuration checks identical to the native extension."""
+    if spec is None:
+        return None
+    if not isinstance(spec, dict):
+        raise ValueError('model.dual_residual must be a mapping')
+    unknown = set(spec) - {'enabled', 'start_layer', 'cross_mix_init'}
+    if unknown:
+        raise ValueError(f'unknown model.dual_residual fields: {sorted(unknown)}')
+    enabled = spec.get('enabled', True)
+    if not isinstance(enabled, bool):
+        raise ValueError('dual_residual.enabled must be a boolean')
+    start = spec.get('start_layer', 8)
+    if (isinstance(num_layers, bool) or not isinstance(num_layers, int) or num_layers <= 0
+            or isinstance(start, bool) or not isinstance(start, int) or not 0 <= start < num_layers):
+        raise ValueError('dual_residual.start_layer must be an integer in [0, num_layers)')
+    cross = spec.get('cross_mix_init', 0.25)
+    if isinstance(cross, bool) or not isinstance(cross, (int, float)) or not math.isfinite(cross) or not 0 < cross < 0.5:
+        raise ValueError('dual_residual.cross_mix_init must lie strictly between 0 and 0.5')
+    return dict(enabled=True, start_layer=start, cross_mix_init=float(cross)) if enabled else None
+
+
+class DualResidualMixing(nn.Module):
+    def __init__(self, cross_mix_init, *, final):
+        super().__init__()
+        probabilities = [[1 - cross_mix_init, cross_mix_init],
+                         [cross_mix_init, 1 - cross_mix_init]]
+        self.post_logits = nn.Parameter(torch.tensor(probabilities, dtype=torch.float32).log())
+        if final:
+            self.merge_logits = nn.Parameter(torch.zeros(2, dtype=torch.float32))
+        else:
+            self.register_parameter('merge_logits', None)
+
+    def forward(self, attention_output, ffn_output):
+        weights = (2.0 * self.post_logits.float().softmax(dim=-1)).to(attention_output.dtype)
+        update0 = weights[0, 0] * attention_output + weights[0, 1] * ffn_output
+        update1 = weights[1, 0] * attention_output + weights[1, 1] * ffn_output
+        return update0, update1
+
+    def merge(self, lane0, lane1):
+        weights = self.merge_logits.float().softmax(dim=-1).to(lane0.dtype)
+        return weights[0] * lane0 + weights[1] * lane1
+
+
+class _DualResidualState:
+    def __init__(self, first_layer, final_layer):
+        self.first_layer = first_layer
+        self.final_layer = final_layer
+        self.active = False
+        self.next_layer = first_layer
+        self.lane1 = None
+
+
+def _dual_layer_forward(self, hidden_states, attention_mask=None, past_key_values=None, **kwargs):
+    state = self._dual_residual_state
+    if not state.active or state.next_layer != self._dual_layer_index:
+        raise RuntimeError('dual-residual layers must run in order inside a full model forward')
+    if not isinstance(hidden_states, torch.Tensor) or hidden_states.ndim != 3:
+        raise ValueError('dual residual requires [batch, sequence, hidden] tensors')
+    lane1 = hidden_states if state.next_layer == state.first_layer else state.lane1
+    if (lane1 is None or lane1.shape != hidden_states.shape
+            or lane1.dtype != hidden_states.dtype or lane1.device != hidden_states.device):
+        raise ValueError('dual-residual streams must have identical shape, dtype and device')
+    if hasattr(self, 'linear_attn'):
+        for name in ('position_ids', 'position_embeddings', 'use_cache', 'output_attentions'):
+            kwargs.pop(name, None)
+        attention = self.linear_attn(
+            hidden_states, cache_params=past_key_values, attention_mask=attention_mask, **kwargs,
+        )
+    else:
+        attention, _ = self.self_attn(
+            hidden_states, attention_mask=attention_mask, past_key_values=past_key_values, **kwargs,
+        )
+    attention = self.post_attention_layernorm(attention)
+    feed_forward = self.post_feedforward_layernorm(self.mlp(lane1))
+    update0, update1 = self.dual_residual_mixing(attention, feed_forward)
+    lane0 = hidden_states + update0
+    lane1 = lane1 + update1
+    state.next_layer += 1
+    if self._dual_layer_index == state.final_layer:
+        state.lane1 = None
+        return self.dual_residual_mixing.merge(lane0, lane1)
+    state.lane1 = lane1
+    return lane0
+
+
+class _ValueResidualState:
+    """Only live during one complete model forward; never part of state_dict."""
+    def __init__(self, source_layer, weight):
+        self.source_layer = source_layer
+        self.weight = weight
+        self.active = False
+        self.first_value = None
+
+    def mix(self, layer_idx, value):
+        if not self.active:
+            raise RuntimeError('value residual attention must run inside a full model forward')
+        if layer_idx == self.source_layer:
+            if self.first_value is not None:
+                raise RuntimeError('first value projection was evaluated twice in one forward')
+            self.first_value = value
+            return value
+        first = self.first_value
+        if first is None:
+            raise RuntimeError('value residual source must precede its consumers')
+        if value.shape != first.shape or value.dtype != first.dtype or value.device != first.device:
+            raise RuntimeError('value residual projections must have matching shape, dtype and device')
+        if self.weight == 0.0:
+            return value
+        if self.weight == 1.0:
+            # Keep the later projection in the graph for DDP's default
+            # find_unused_parameters=False, with an exactly zero gradient.
+            return first + 0.0 * value
+        # Match native projection hooks, including BF16 operation ordering.
+        return (1.0 - self.weight) * value + self.weight * first
 
 
 class SubmissionRMSNorm(OlmoHybridRMSNorm):
@@ -58,6 +198,7 @@ class SubmissionAttention(OlmoHybridAttention):
         super().__init__(config, layer_idx)
         self.q_norm = SubmissionRMSNorm(config.num_attention_heads * self.head_dim, config.rms_norm_eps)
         self.k_norm = SubmissionRMSNorm(config.num_key_value_heads * self.head_dim, config.rms_norm_eps)
+        self._value_residual_state = None
 
     def forward(self, hidden_states, position_embeddings=None, attention_mask=None,
                 past_key_values=None, **kwargs):
@@ -65,7 +206,10 @@ class SubmissionAttention(OlmoHybridAttention):
         head_shape = (*shape, -1, self.head_dim)
         q = self.q_norm(self.q_proj(hidden_states)).view(head_shape).transpose(1, 2)
         k = self.k_norm(self.k_proj(hidden_states)).view(head_shape).transpose(1, 2)
-        v = self.v_proj(hidden_states).view(head_shape).transpose(1, 2)
+        v = self.v_proj(hidden_states)
+        if self._value_residual_state is not None:
+            v = self._value_residual_state.mix(self.layer_idx, v)
+        v = v.view(head_shape).transpose(1, 2)
         if position_embeddings is not None:
             cos, sin = (x.unsqueeze(1).float() for x in position_embeddings)
             def rotate(x):
@@ -92,10 +236,42 @@ class SubmissionAttention(OlmoHybridAttention):
 
 
 class SubmissionGatedDeltaNet(OlmoHybridGatedDeltaNet):
+    def _cpu_forward(self, hidden_states, attention_mask):
+        # The public HF functions can dispatch to installed FLA/Triton kernels
+        # even on CPU. Invoke the underlying PyTorch implementation locally.
+        delta_rule = inspect.unwrap(torch_chunk_gated_delta_rule)
+        x = apply_mask_to_padding_states(hidden_states, attention_mask)
+        batch, length, _ = x.shape
+        weights = self.conv1d.weight.split([self.key_dim, self.key_dim, self.value_dim], dim=0)
+        projections = []
+        for projection, weight in zip((self.q_proj, self.k_proj, self.v_proj), weights):
+            value = projection(x).transpose(1, 2)
+            value = F.conv1d(value, weight, padding=self.conv_kernel_size - 1,
+                             groups=value.shape[1])[..., :length]
+            projections.append(F.silu(value).transpose(1, 2))
+        q = projections[0].reshape(batch, length, self.num_k_heads, self.head_k_dim)
+        k = projections[1].reshape(batch, length, self.num_k_heads, self.head_k_dim)
+        v = projections[2].reshape(batch, length, self.num_v_heads, self.head_v_dim)
+        if self.num_v_heads > self.num_k_heads:
+            ratio = self.num_v_heads // self.num_k_heads
+            q, k = q.repeat_interleave(ratio, dim=2), k.repeat_interleave(ratio, dim=2)
+        beta = self.b_proj(x).sigmoid() * (2.0 if self.allow_neg_eigval else 1.0)
+        g = -self.A_log.float().exp() * F.softplus(self.a_proj(x).float() + self.dt_bias)
+        output, _ = delta_rule(q, k, v, g=g, beta=beta, use_qk_l2norm_in_kernel=True)
+        gate = self.g_proj(x).reshape(batch, length, self.num_v_heads, self.head_v_dim)
+        normalized = output.float()
+        normalized = normalized * torch.rsqrt(
+            normalized.square().mean(-1, keepdim=True) + self.o_norm.variance_epsilon,
+        )
+        output = (normalized * self.o_norm.weight.float() * F.silu(gate.float())).to(x.dtype)
+        return self.o_proj(output.reshape(batch, length, self.value_dim))
+
     def forward(self, hidden_states, cache_params=None, attention_mask=None, **kwargs):
         if not hidden_states.is_cuda:
-            return super().forward(hidden_states, cache_params=cache_params,
-                                   attention_mask=attention_mask, **kwargs)
+            if cache_params is not None:
+                return super().forward(hidden_states, cache_params=cache_params,
+                                       attention_mask=attention_mask, **kwargs)
+            return self._cpu_forward(hidden_states, attention_mask)
         if cache_params is not None:
             raise ValueError('Native-kernel Hybrid inference requires use_cache=False')
         # Keep the exact native convolution, L2 normalization, delta-rule and
@@ -213,16 +389,26 @@ class CompressedAttention(nn.Module):
 class SubmissionHybridModel(OlmoHybridModel):
     config_class = SubmissionHybridConfig
     # Native FLA constructs its gated norm weights in FP32, even for BF16 runs.
-    _keep_in_fp32_modules_strict = ['o_norm']
+    _keep_in_fp32_modules_strict = ['o_norm', 'dual_residual_mixing']
 
     def __init__(self, config):
         super().__init__(config)
+        residual_spec = validate_value_residual_spec(getattr(config, 'value_residual', None))
+        attention_layers = [i for i, layer_type in enumerate(config.layer_types)
+                            if layer_type == 'full_attention']
+        if residual_spec is not None and len(attention_layers) < 2:
+            raise ValueError('value residual requires at least two full-attention layers')
+        self._value_residual_state = (
+            _ValueResidualState(attention_layers[0], residual_spec['first_layer_weight'])
+            if residual_spec is not None else None
+        )
         for index, layer_type in enumerate(config.layer_types):
             if layer_type == 'linear_attention':
                 self.layers[index] = PostNormGDNLayer(config, index)
             else:
                 layer = self.layers[index]
                 layer.self_attn = SubmissionAttention(config, index)
+                layer.self_attn._value_residual_state = self._value_residual_state
                 layer.post_attention_layernorm = SubmissionRMSNorm(config.hidden_size, config.rms_norm_eps)
                 layer.post_feedforward_layernorm = SubmissionRMSNorm(config.hidden_size, config.rms_norm_eps)
         self.norm = SubmissionRMSNorm(config.hidden_size, config.rms_norm_eps)
@@ -234,12 +420,68 @@ class SubmissionHybridModel(OlmoHybridModel):
                 raise ValueError('compressed branch must attach to a full-attention layer')
             layer = self.layers[index]
             layer.self_attn = CompressedAttention(layer.self_attn, config)
+        dual_spec = validate_dual_residual_spec(
+            getattr(config, 'dual_residual', None), num_layers=config.num_hidden_layers,
+        )
+        self._dual_residual_state = None
+        if dual_spec is not None:
+            self._dual_residual_state = _DualResidualState(
+                dual_spec['start_layer'], config.num_hidden_layers - 1,
+            )
+            for index in range(dual_spec['start_layer'], config.num_hidden_layers):
+                layer = self.layers[index]
+                layer.dual_residual_mixing = DualResidualMixing(
+                    dual_spec['cross_mix_init'], final=index == config.num_hidden_layers - 1,
+                )
+                layer._dual_residual_state = self._dual_residual_state
+                layer._dual_layer_index = index
+                layer.forward = MethodType(_dual_layer_forward, layer)
         self.post_init()
+
+    def forward(self, *args, **kwargs):
+        state = self._value_residual_state
+        dual = self._dual_residual_state
+        if state is None and dual is None:
+            return super().forward(*args, **kwargs)
+        if len(args) > 1:
+            raise ValueError('value residual model accepts only input_ids positionally; use keyword arguments')
+        use_cache = kwargs.get('use_cache')
+        if use_cache is None:
+            use_cache = self.config.use_cache
+        if use_cache or any(kwargs.get(name) is not None
+                            for name in ('past_key_values', 'cache_params', 'kv_cache')):
+            raise ValueError('value residual requires use_cache=False and no cached states')
+        if self.training and self.is_gradient_checkpointing:
+            raise ValueError('value residual does not support gradient checkpointing')
+        if torch.compiler.is_compiling():
+            raise RuntimeError('residual extensions require eager full-model forwards')
+        if any(item is not None and item.active for item in (state, dual)):
+            raise RuntimeError('nested/reentrant residual model forward is not supported')
+        if state is not None:
+            state.active = True
+            state.first_value = None
+        if dual is not None:
+            dual.active = True
+            dual.next_layer = dual.first_layer
+            dual.lane1 = None
+        try:
+            result = super().forward(*args, **kwargs)
+            if dual is not None and (dual.next_layer != dual.final_layer + 1 or dual.lane1 is not None):
+                raise RuntimeError('all dual-residual layers must run exactly once and merge')
+            return result
+        finally:
+            # Autograd owns tensors used by outputs; the model retains none.
+            if state is not None:
+                state.first_value = None
+                state.active = False
+            if dual is not None:
+                dual.lane1 = None
+                dual.active = False
 
 
 class SubmissionHybridForCausalLM(OlmoHybridForCausalLM):
     config_class = SubmissionHybridConfig
-    _keep_in_fp32_modules_strict = ['o_norm']
+    _keep_in_fp32_modules_strict = ['o_norm', 'dual_residual_mixing']
     _no_split_modules = ['PostNormGDNLayer', 'OlmoHybridAttentionDecoderLayer']
 
     def __init__(self, config):

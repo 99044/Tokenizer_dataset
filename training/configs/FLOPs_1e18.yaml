@@ -8,14 +8,14 @@ scaling:
   expected_branch_parameters: 110100480
   parameter_count_vocab_size: 24576
   tokens_per_update: 196608
-  flops_accounting: Hybrid ledger plus compressed-branch upper estimate
+  flops_accounting: baseline_matched_attention_gemm_length_proxy
 budget:
   total_training_flops: 1000000000000000000
-  planned_training_flops: 989946404858480256
-  planned_training_tokens: 1476919296
+  planned_training_flops: 989896105748962176
+  planned_training_tokens: 1587019776
   flops_per_token_numerator: 5490916782362
   flops_per_token_denominator: 8192
-  flops_per_update: 131782002776688
+  flops_per_token_basis: 8192-token reference; use curriculum stage costs at runtime
 model:
   type: olmo_hybrid_scaling
   num_layers: 12
@@ -63,10 +63,81 @@ model:
     scale: 0.001
 training:
   dtype: bfloat16
-  max_steps: 7512
+  max_steps: 8072
   micro_batch_size: 1
-  gradient_accumulation_steps: 6
+  gradient_accumulation_steps: 3
   gradient_checkpointing: false
+  length_curriculum:
+    kind: e15_length_fp32
+    version: 1
+    world_size: 8
+    tokens_per_update: 196608
+    reference:
+      context_length: 8192
+      max_steps: 7512
+      planned_training_flops: 989946404858480256
+      planned_training_tokens: 1476919296
+      flops_per_token_numerator: 5490916782362
+      flops_per_token_denominator: 8192
+      warmup_steps: 20
+      cooldown_steps: 1255
+      final_lr_ratio: 0.0
+    stages:
+    - stage: short
+      stage_index: 0
+      length: 2048
+      micro_batch_size: 4
+      grad_accum_steps: 3
+      tokens_per_update: 196608
+      requested_flops_fraction: 0.5
+      first_step: 1
+      last_step: 4202
+      steps: 4202
+      flops_per_update: 117793831164528
+      flops: 494969678553346656
+      cumulative_flops: 494969678553346656
+    - stage: medium
+      stage_index: 1
+      length: 4096
+      micro_batch_size: 2
+      grad_accum_steps: 3
+      tokens_per_update: 196608
+      requested_flops_fraction: 0.2
+      first_step: 4203
+      last_step: 5818
+      steps: 1616
+      flops_per_update: 122456555035248
+      flops: 197889792936960768
+      cumulative_flops: 692859471490307424
+    - stage: full
+      stage_index: 2
+      length: 8192
+      micro_batch_size: 1
+      grad_accum_steps: 3
+      tokens_per_update: 196608
+      requested_flops_fraction: 0.3
+      first_step: 5819
+      last_step: 8072
+      steps: 2254
+      flops_per_update: 131782002776688
+      flops: 297036634258654752
+      cumulative_flops: 989896105748962176
+    max_steps: 8072
+    planned_training_flops: 989896105748962176
+    planned_training_tokens: 1587019776
+    unused_reference_flops: 50299109518080
+    accounting:
+      kind: baseline_matched_attention_gemm_length_proxy
+      official_ledger: false
+      length_formula: c(L)=c(8192)-attention_layers*6*hidden*(8192-L)-3*4*hidden*(8192//compression_block-L//compression_block)
+      fraction_basis: FLOPs budget; final stage receives complete updates from the
+        remainder
+      limitations: Analytical estimate inherited from the baseline. Length-dependent
+        softmax and GDN boundary terms are held fixed. The compressed branch retains
+        its 3x-forward upper estimate. Optimizer updates, FP32 master copies, communication,
+        activation recomputation and training-loss softmax/CE are outside this prediction-graph
+        ledger. Runtime numerical fallback costs require separate reporting.
+  fp32_master_weights: true
 optimizer:
   name: soap
   learning_rate: 0.003
@@ -77,11 +148,14 @@ optimizer:
   weight_decay: 0.1
   precondition_frequency: 10
   max_precond_dim: 1024
+  compressed_branch: adamw
 scheduler:
   name: linear_cooldown
-  warmup_steps: 20
+  warmup_steps: 23
   cooldown_steps: 1255
   final_lr_ratio: 0.0
+  warmup_fraction: 0.0026624068157614484
+  cooldown_fraction: 0.1670660276890309
 data:
   tokenizer_path: null
   train_path: null
@@ -93,27 +167,27 @@ logging:
   entity: echo-lab
   project: scicomp26
   log_every_steps: 5
-  eval_every_steps: 7512
+  eval_every_steps: 8072
   eval_batches: 8
   final_eval_batches: 64
-  checkpoint_every_steps: 7512
+  checkpoint_every_steps: 8072
   checkpoint_steps:
-  - 751
-  - 1502
-  - 2254
-  - 3005
-  - 3756
-  - 4507
-  - 5258
-  - 6010
-  - 6761
+  - 807
+  - 1614
+  - 2422
+  - 3229
+  - 4036
+  - 4843
+  - 5650
+  - 6458
+  - 7265
   checkpoint_keep_last: 2
 output:
   directory: runs/submission_20261103/1e18
 submission:
   target_date: '2026-11-03'
   budget_tier: 1e18
-  data_parallel_size: 4
+  data_parallel_size: 8
 initialization:
   projection_scale: 0.8
   repair_gdn_a_log: true

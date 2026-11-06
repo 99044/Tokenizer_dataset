@@ -189,8 +189,6 @@ def export_checkpoint(args):
     # CPU Hybrid checks use an independent token recurrence. Native FLA imports
     # require a GPU driver even before executing kernels; never fake that import.
     cpu_reference = hybrid and torch.device(args.validation_device).type == 'cpu'
-    if compressed and cpu_reference:
-        raise ValueError('compressed-attention export validation requires a CUDA device')
     if cpu_reference:
         core = NativeHybridCPUReference(settings, native_state)
     else:
@@ -205,6 +203,12 @@ def export_checkpoint(args):
         if compressed:
             from compressed_attention import attach_compressed_attention
             attach_compressed_attention(core, settings, torch.device('meta'))
+        if hybrid:
+            from dual_residual import attach_dual_residual
+            from value_residual import attach_value_residual
+
+            attach_dual_residual(core, settings)
+            attach_value_residual(core, settings)
         core.load_state_dict(native_state, strict=True, assign=True)
         tie_output_weights(core)
     if not hybrid:
@@ -219,7 +223,10 @@ def export_checkpoint(args):
     converted = {name: value.contiguous() for name, value in
                  convert_state_to_hf(hf_config, native_state).items()}
     for name, value in converted.items():
-        expected_dtype = torch.float32 if hybrid and name.endswith('.o_norm.weight') else torch.bfloat16
+        fp32_parameter = hybrid and (
+            name.endswith('.o_norm.weight') or '.dual_residual_mixing.' in name
+        )
+        expected_dtype = torch.float32 if fp32_parameter else torch.bfloat16
         if value.dtype != expected_dtype:
             raise ValueError(f'checkpoint weight {name} has dtype {value.dtype}, expected {expected_dtype}')
     with torch.device('meta'):
@@ -238,7 +245,9 @@ def export_checkpoint(args):
         'source_step': checkpoint['step'], 'source_model_config': settings['model'],
         'training_context_length': training_length, 'max_position_embeddings': max_length,
         'model_type': hf_config.model_type, 'mapped_tensor_count': len(converted),
-        'dtype': 'bfloat16_with_fp32_gdn_norms' if hybrid else 'bfloat16',
+        'dtype': ('bfloat16_with_fp32_gdn_norms_and_residual_mixing'
+                  if hybrid and getattr(hf_config, 'dual_residual', None)
+                  else 'bfloat16_with_fp32_gdn_norms' if hybrid else 'bfloat16'),
         'trust_remote_code_required': hybrid,
         'validation_reference': 'unfused_native_cpu_recurrence' if cpu_reference else 'native_olmo_core',
         'tokenizer': token_record, 'logits_validation': [],

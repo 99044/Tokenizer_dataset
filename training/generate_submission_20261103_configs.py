@@ -15,13 +15,15 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'training' / 'src'))
 from graph_accounting import audit_ledger
 from hybrid_flops import complete_hybrid_ledger, expected_parameter_count
+from context_curriculum import apply_length_curriculum
 
 BASE = ROOT / 'training' / 'configs' / 'FLOPs_3e17.yaml'
+DATA_PARALLEL_SIZE = 8
 TIERS = (
     ('3e17', 300_000_000_000_000_000, 256, 1984, 2, 4, 'soap', 0.003),
-    ('1e18', 1_000_000_000_000_000_000, 640, 2048, 5, 6, 'soap', 0.003),
-    ('3e18', 3_000_000_000_000_000_000, 640, 2048, 5, 8, 'soap', 0.003),
-    ('1e19', 10_000_000_000_000_000_000, 1536, 6144, 12, 16, 'muon', 0.003),
+    ('1e18', 1_000_000_000_000_000_000, 640, 2048, 5, 3, 'soap', 0.003),
+    ('3e18', 3_000_000_000_000_000_000, 640, 2048, 5, 4, 'soap', 0.003),
+    ('1e19', 10_000_000_000_000_000_000, 1536, 6144, 12, 8, 'muon', 0.003),
 )
 NOMINAL_SIZES = {'3e17': '50m', '1e18': '200m', '3e18': '200m', '1e19': '1.2b'}
 
@@ -30,6 +32,11 @@ def make_config(tier):
     label, budget, hidden, intermediate, heads, accumulation, optimizer_name, lr = tier
     settings = copy.deepcopy(yaml.safe_load(BASE.read_text()))
     model = settings['model']
+    # BASE is the generated 3e17 file. Rebuild shared baseline accounting first.
+    model.pop('dual_residual', None)
+    model.pop('value_residual', None)
+    settings['training'].pop('length_curriculum', None)
+    settings['training'].pop('fp32_master_weights', None)
     model.update(
         num_layers=12, hidden_size=hidden, intermediate_size=intermediate,
         num_attention_heads=heads, num_key_value_heads=heads,
@@ -57,8 +64,8 @@ def make_config(tier):
     ) + 4 * hidden * compressed_blocks
     branch_per_token = math.ceil(3 * branch_forward)
     per_micro = base_micro_flops + model['context_length'] * branch_per_token
-    tokens_per_update = 4 * accumulation * model['context_length']
-    flops_per_update = 4 * accumulation * per_micro
+    tokens_per_update = DATA_PARALLEL_SIZE * accumulation * model['context_length']
+    flops_per_update = DATA_PARALLEL_SIZE * accumulation * per_micro
     max_steps = (budget * 99 // 100) // flops_per_update
     if max_steps < 10:
         raise ValueError('budget is too small for checkpoint schedule')
@@ -98,6 +105,7 @@ def make_config(tier):
             eps=1e-8, weight_decay=0.1,
             precondition_frequency=10, max_precond_dim=1024,
         )
+    optimizer['compressed_branch'] = 'adamw'
     settings['optimizer'] = optimizer
     settings['initialization'] = dict(projection_scale=0.8, repair_gdn_a_log=True)
     if label == '3e17':
@@ -119,7 +127,14 @@ def make_config(tier):
     )
     settings['output'] = dict(directory=f'runs/submission_20261103/{label}')
     settings['submission'] = dict(target_date='2026-11-03', budget_tier=label,
-                                  data_parallel_size=4)
+                                  data_parallel_size=DATA_PARALLEL_SIZE)
+    if label == '3e17':
+        model['dual_residual'] = dict(enabled=True, start_layer=8, cross_mix_init=0.25)
+        model['value_residual'] = dict(enabled=True, first_layer_weight=0.5)
+        settings['scaling']['expected_total_parameters'] += 18
+        settings['scaling']['additional_residual_parameters'] = 18
+    if label in {'3e17', '1e18', '3e18'}:
+        settings = apply_length_curriculum(settings)
     return settings
 
 

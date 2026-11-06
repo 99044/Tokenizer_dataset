@@ -11,6 +11,9 @@ from olmo_core.config import DType
 from olmo_core.nn.transformer import TransformerConfig
 from olmo_core.nn.transformer.config import TransformerBlockType
 
+from dual_residual import validate_dual_residual_spec
+from value_residual import validate_value_residual_spec
+
 
 def load_settings(config_path: Path) -> dict[str, Any]:
     return yaml.safe_load(config_path.read_text())
@@ -22,6 +25,14 @@ def build_model_config(
     settings = load_settings(config_path)
     model = settings["model"]
     training = settings["training"]
+    dual_residual = validate_dual_residual_spec(
+        model.get("dual_residual"), num_layers=model["num_layers"]
+    )
+    value_residual = validate_value_residual_spec(model.get("value_residual"))
+    if (dual_residual is not None or value_residual is not None) and model["type"] not in {
+        "olmo_hybrid_1b", "olmo_hybrid_scaling"
+    }:
+        raise ValueError("residual extensions currently support only OLMo hybrid models")
     configured_vocab = model.get("vocab_size")
     if configured_vocab is not None and configured_vocab != vocab_size:
         raise ValueError(
