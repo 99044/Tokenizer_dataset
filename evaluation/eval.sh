@@ -2,8 +2,8 @@
 set -euo pipefail
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-dataset_path=${1:?Usage: bash eval.sh /path/to/dataset.jsonl /path/to/hf-model [output.json]}
-model_path=${2:?Usage: bash eval.sh /path/to/dataset.jsonl /path/to/hf-model [output.json]}
+dataset_path=${1:?Usage: bash eval.sh /path/to/token-cache-or-dataset.jsonl /path/to/hf-model [output.json]}
+model_path=${2:?Usage: bash eval.sh /path/to/token-cache-or-dataset.jsonl /path/to/hf-model [output.json]}
 output=${3:-${EVAL_OUTPUT:-result.json}}
 
 python_cmd=${PYTHON:-python}
@@ -12,8 +12,16 @@ batch_size=${BATCH_SIZE:-32}
 sequence_length=${SEQUENCE_LENGTH:-8192}
 fusion_mode=${FUSION_MODE:-ffn_rmsnorm}
 
-if [[ ! -f "$dataset_path" || ! -d "$model_path" ]]; then
-    echo "Dataset JSONL or HF model directory not found" >&2
+if [[ -d "$dataset_path" ]]; then
+    data_args=(--packed-cache-dir "$dataset_path")
+elif [[ -f "$dataset_path" ]]; then
+    data_args=(--dataset-path "$dataset_path")
+else
+    echo "Token cache directory or dataset JSONL not found" >&2
+    exit 2
+fi
+if [[ ! -d "$model_path" ]]; then
+    echo "HF model directory not found" >&2
     exit 2
 fi
 if [[ ! "$nproc_per_node" =~ ^[0-9]+$ ]] || (( nproc_per_node < 1 )); then
@@ -33,8 +41,8 @@ if [[ -e "$output" ]]; then
     exit 2
 fi
 
-"$python_cmd" -m torch.distributed.run --standalone --nnodes=1 \
+"$python_cmd" -m torch.distributed.run --standalone --nnodes=1 --local-addr=127.0.0.1 \
     --nproc-per-node="$nproc_per_node" "$script_dir/eval.py" \
-    --dataset-path "$dataset_path" --model-path "$model_path" \
+    "${data_args[@]}" --model-path "$model_path" \
     --batch-size "$batch_size" --sequence-length "$sequence_length" \
     --fusion "$fusion_mode" --output "$output"

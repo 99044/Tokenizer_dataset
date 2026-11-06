@@ -21,44 +21,46 @@ BASE = ROOT / 'training' / 'configs' / 'FLOPs_3e17.yaml'
 DATA_PARALLEL_SIZE = 8
 TIERS = (
     ('3e17', 300_000_000_000_000_000, 256, 1984, 2, 4, 'soap', 0.003),
-    ('1e18', 1_000_000_000_000_000_000, 640, 2048, 5, 3, 'soap', 0.003),
-    ('3e18', 3_000_000_000_000_000_000, 640, 2048, 5, 4, 'soap', 0.003),
-    ('1e19', 10_000_000_000_000_000_000, 1536, 6144, 12, 8, 'muon', 0.003),
+    ('1e18', 1_000_000_000_000_000_000, 640, 2048, 5, 4, 'soap', 0.003),
+    ('3e18', 3_000_000_000_000_000_000, 640, 2048, 5, 8, 'soap', 0.003),
+    ('1e19', 10_000_000_000_000_000_000, 1024, 4352, 8, 8, 'muon', 0.003),
 )
-NOMINAL_SIZES = {'3e17': '50m', '1e18': '200m', '3e18': '200m', '1e19': '1.2b'}
+NOMINAL_SIZES = {'3e17': '50m', '1e18': '200m', '3e18': '200m', '1e19': '330m_trunk'}
 
 
 def make_config(tier):
     label, budget, hidden, intermediate, heads, accumulation, optimizer_name, lr = tier
     settings = copy.deepcopy(yaml.safe_load(BASE.read_text()))
     model = settings['model']
+    layers = 16 if label == '1e19' else 12
+    compression_block = 388 if label == '1e19' else 128
     # BASE is the generated 3e17 file. Rebuild shared baseline accounting first.
     model.pop('dual_residual', None)
     model.pop('value_residual', None)
     settings['training'].pop('length_curriculum', None)
     settings['training'].pop('fp32_master_weights', None)
     model.update(
-        num_layers=12, hidden_size=hidden, intermediate_size=intermediate,
+        num_layers=layers, hidden_size=hidden, intermediate_size=intermediate,
         num_attention_heads=heads, num_key_value_heads=heads,
         gdn_num_heads=heads, gdn_num_value_heads=heads,
         vocab_size=24576,
         compressed_attention=dict(
-            layer_index=11, block_size=128,
+            layer_index=layers - 1, block_size=compression_block,
             intermediate_size=intermediate,
             scale=0.0001 if label == '3e17' else 0.001,
         ),
     )
     shape = dict(model, gdn_value_dim=192)
     base_parameters = expected_parameter_count(shape, 24576)
-    branch_parameters = 2 * 128 * hidden * hidden + 4 * hidden * intermediate
+    branch_parameters = 2 * compression_block * hidden * hidden + 4 * hidden * intermediate
     total_parameters = base_parameters + branch_parameters
     ledger = complete_hybrid_ledger(BASE, settings, 1, 24576, 1, base_only=True)
     base_micro_flops = audit_ledger(
         ledger, BASE, settings, 1, 24576, ROOT, base_only=True,
     )['totals']['total']
-    compressed_blocks = model['context_length'] // 128
+    compressed_blocks = model['context_length'] // compression_block
     branch_forward = Fraction(
-        4 * compressed_blocks * 128 * hidden * hidden
+        4 * compressed_blocks * compression_block * hidden * hidden
         + 8 * compressed_blocks * hidden * intermediate,
         model['context_length'],
     ) + 4 * hidden * compressed_blocks
@@ -108,15 +110,15 @@ def make_config(tier):
     optimizer['compressed_branch'] = 'adamw'
     settings['optimizer'] = optimizer
     settings['initialization'] = dict(projection_scale=0.8, repair_gdn_a_log=True)
-    if label == '3e17':
+    if label in {'3e17', '1e18', '3e18'}:
         settings['scheduler'] = dict(
             name='linear_cooldown', warmup_steps=math.ceil(max_steps * 0.05),
             cooldown_steps=max(1, round(max_steps * 0.30)), final_lr_ratio=0.01,
         )
     else:
         settings['scheduler'] = dict(
-            name='linear_cooldown', warmup_steps=20,
-            cooldown_steps=max(1, round(max_steps * 0.167)), final_lr_ratio=0.0,
+            name='linear_cooldown', warmup_steps=round(max_steps * 0.04),
+            cooldown_steps=max(1, round(max_steps * 0.30)), final_lr_ratio=0.01,
         )
     settings['logging'] = dict(
         backend='wandb', entity='echo-lab', project='scicomp26',
@@ -128,7 +130,7 @@ def make_config(tier):
     settings['output'] = dict(directory=f'runs/submission_20261103/{label}')
     settings['submission'] = dict(target_date='2026-11-03', budget_tier=label,
                                   data_parallel_size=DATA_PARALLEL_SIZE)
-    if label == '3e17':
+    if label in {'3e17', '1e18', '3e18'}:
         model['dual_residual'] = dict(enabled=True, start_layer=8, cross_mix_init=0.25)
         model['value_residual'] = dict(enabled=True, first_layer_weight=0.5)
         settings['scaling']['expected_total_parameters'] += 18
@@ -136,6 +138,17 @@ def make_config(tier):
     if label in {'3e17', '1e18', '3e18'}:
         settings = apply_length_curriculum(settings)
     return settings
+
+
+def make_1e19_fp32_residual_curriculum():
+    settings = make_config(TIERS[-1])
+    settings['run']['name'] += '_fp32_residual_curriculum'
+    settings['output']['directory'] += '_1'
+    settings['model']['dual_residual'] = dict(enabled=True, start_layer=12, cross_mix_init=0.25)
+    settings['model']['value_residual'] = dict(enabled=True, first_layer_weight=0.5)
+    settings['scaling']['additional_residual_parameters'] = 18
+    settings['scaling']['expected_total_parameters'] += 18
+    return apply_length_curriculum(settings)
 
 
 def main():
@@ -147,6 +160,11 @@ def main():
         print(label, config['scaling']['expected_total_parameters'],
               config['training']['max_steps'],
               config['budget']['planned_training_flops'])
+    variant = make_1e19_fp32_residual_curriculum()
+    path = ROOT / 'training' / 'configs' / 'FLOPs_1e19_1.yaml'
+    path.write_text(yaml.safe_dump(variant, sort_keys=False, allow_unicode=True))
+    print('1e19_1', variant['scaling']['expected_total_parameters'],
+          variant['training']['max_steps'], variant['budget']['planned_training_flops'])
 
 
 if __name__ == '__main__':

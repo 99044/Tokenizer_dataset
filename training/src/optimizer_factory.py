@@ -169,6 +169,9 @@ def build_optimizer(
 
     if name in {"muon", "normuon"}:
         matrix, scalar = _matrix_and_scalar_parameters(model, compressed_ids)
+        if parameter_map is not None:
+            matrix = tuple((name, parameter_map[id(parameter)]) for name, parameter in matrix)
+            scalar = tuple((name, parameter_map[id(parameter)]) for name, parameter in scalar)
         scalar_lr = _positive_float(config["scalar_learning_rate"], "scalar_learning_rate")
         adjust_lr = config.get("adjust_lr")
         if adjust_lr != "rms_norm":

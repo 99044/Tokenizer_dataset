@@ -210,8 +210,8 @@ def main():
         if expected_branch is not None and compressed_parameters != expected_branch:
             raise ValueError(f'compressed branch parameters {compressed_parameters} != {expected_branch}')
         use_fp32_master = bool(settings['training'].get('fp32_master_weights', False))
-        if use_fp32_master and settings['optimizer']['name'].lower() not in {'adamw', 'soap'}:
-            raise ValueError('FP32 master weights require AdamW or SOAP')
+        if use_fp32_master and settings['optimizer']['name'].lower() not in {'adamw', 'soap', 'muon', 'normuon'}:
+            raise ValueError('FP32 master weights require AdamW, SOAP, Muon or NorMuon')
         # DDP broadcasts initial weights before their FP32 copies are created.
         ddp = DDP(model, device_ids=[local_rank], broadcast_buffers=False)
         master_weights = FP32MasterWeights(model) if use_fp32_master else None

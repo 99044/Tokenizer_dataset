@@ -1,29 +1,29 @@
 run:
-  name: wide_compressed_1536_1e19_muon
+  name: wide_compressed_1024_1e19_muon
   seed: 42
 scaling:
   family: wide_compressed_24k
-  nominal_size: 1.2b
-  expected_total_parameters: 1175476632
-  expected_branch_parameters: 641728512
+  nominal_size: 330m_trunk
+  expected_total_parameters: 1163259328
+  expected_branch_parameters: 831520768
   parameter_count_vocab_size: 24576
   tokens_per_update: 524288
   flops_accounting: Hybrid ledger plus compressed-branch upper estimate
 budget:
   total_training_flops: 10000000000000000000
-  planned_training_flops: 9898708241050979328
-  planned_training_tokens: 2802843648
-  flops_per_token_numerator: 28931409701912
+  planned_training_flops: 9899423883164631040
+  planned_training_tokens: 4364173312
+  flops_per_token_numerator: 18582231880640
   flops_per_token_denominator: 8192
-  flops_per_update: 1851610220922368
+  flops_per_update: 1189262840360960
 model:
   type: olmo_hybrid_scaling
-  num_layers: 12
-  hidden_size: 1536
-  num_attention_heads: 12
-  num_key_value_heads: 12
+  num_layers: 16
+  hidden_size: 1024
+  num_attention_heads: 8
+  num_key_value_heads: 8
   attention_head_dim: 128
-  intermediate_size: 6144
+  intermediate_size: 4352
   activation: swiglu
   normalization: rmsnorm
   normalization_style: reordered_norm
@@ -43,8 +43,8 @@ model:
   - gdn
   - gdn
   - attn
-  gdn_num_heads: 12
-  gdn_num_value_heads: 12
+  gdn_num_heads: 8
+  gdn_num_value_heads: 8
   gdn_head_dim: 96
   gdn_value_expand: 2.0
   gdn_allow_neg_eigval: true
@@ -57,18 +57,17 @@ model:
   mlp_bias: false
   dropout: 0.0
   compressed_attention:
-    layer_index: 11
-    block_size: 128
-    intermediate_size: 6144
+    layer_index: 15
+    block_size: 388
+    intermediate_size: 4352
     scale: 0.001
 training:
   dtype: bfloat16
-  max_steps: 5346
+  max_steps: 8324
   micro_batch_size: 1
   gradient_accumulation_steps: 8
   gradient_checkpointing: false
 optimizer:
-  compressed_branch: adamw
   name: muon
   learning_rate: 0.003
   scalar_learning_rate: 0.000265
@@ -82,11 +81,12 @@ optimizer:
   expert_wise: true
   nesterov: false
   use_triton: false
+  compressed_branch: adamw
 scheduler:
   name: linear_cooldown
-  warmup_steps: 20
-  cooldown_steps: 893
-  final_lr_ratio: 0.0
+  warmup_steps: 333
+  cooldown_steps: 2497
+  final_lr_ratio: 0.01
 data:
   tokenizer_path: null
   train_path: null
@@ -98,20 +98,20 @@ logging:
   entity: echo-lab
   project: scicomp26
   log_every_steps: 5
-  eval_every_steps: 5346
+  eval_every_steps: 8324
   eval_batches: 8
   final_eval_batches: 64
-  checkpoint_every_steps: 5346
+  checkpoint_every_steps: 8324
   checkpoint_steps:
-  - 535
-  - 1069
-  - 1604
-  - 2138
-  - 2673
-  - 3208
-  - 3742
-  - 4277
-  - 4811
+  - 832
+  - 1665
+  - 2497
+  - 3330
+  - 4162
+  - 4994
+  - 5827
+  - 6659
+  - 7492
   checkpoint_keep_last: 2
 output:
   directory: runs/submission_20261103/1e19

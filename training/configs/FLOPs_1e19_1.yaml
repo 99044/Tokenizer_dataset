@@ -1,0 +1,218 @@
+run:
+  name: wide_compressed_1024_1e19_muon_fp32_residual_curriculum
+  seed: 42
+scaling:
+  family: wide_compressed_24k
+  nominal_size: 330m_trunk
+  expected_total_parameters: 1163259346
+  expected_branch_parameters: 831520768
+  parameter_count_vocab_size: 24576
+  tokens_per_update: 524288
+  flops_accounting: e16_baseline_matched_with_residual_upper_bounds
+  additional_residual_parameters: 18
+budget:
+  total_training_flops: 10000000000000000000
+  planned_training_flops: 9899316673283313664
+  planned_training_tokens: 4560781312
+  flops_per_token_numerator: 18582231880640
+  flops_per_token_denominator: 8192
+  flops_per_token_basis: 8192-token reference; use curriculum stage costs at runtime
+model:
+  type: olmo_hybrid_scaling
+  num_layers: 16
+  hidden_size: 1024
+  num_attention_heads: 8
+  num_key_value_heads: 8
+  attention_head_dim: 128
+  intermediate_size: 4352
+  activation: swiglu
+  normalization: rmsnorm
+  normalization_style: reordered_norm
+  rms_norm_eps: 1.0e-06
+  qk_norm: true
+  position_encoding: rope
+  rope_theta: 500000
+  attention_window_pattern:
+  - 4096
+  - 4096
+  - 4096
+  - -1
+  force_full_attention_on_first_layer: false
+  force_full_attention_on_last_layer: true
+  block_pattern:
+  - gdn
+  - gdn
+  - gdn
+  - attn
+  gdn_num_heads: 8
+  gdn_num_value_heads: 8
+  gdn_head_dim: 96
+  gdn_value_expand: 2.0
+  gdn_allow_neg_eigval: true
+  gdn_conv_size: 4
+  gdn_norm_eps: 1.0e-05
+  context_length: 8192
+  vocab_size: 24576
+  tie_word_embeddings: true
+  attention_bias: false
+  mlp_bias: false
+  dropout: 0.0
+  compressed_attention:
+    layer_index: 15
+    block_size: 388
+    intermediate_size: 4352
+    scale: 0.001
+  dual_residual:
+    enabled: true
+    start_layer: 12
+    cross_mix_init: 0.25
+  value_residual:
+    enabled: true
+    first_layer_weight: 0.5
+training:
+  dtype: bfloat16
+  max_steps: 8699
+  micro_batch_size: 1
+  gradient_accumulation_steps: 8
+  gradient_checkpointing: false
+  length_curriculum:
+    kind: e16_dual_length_fp32
+    version: 1
+    world_size: 8
+    tokens_per_update: 524288
+    reference:
+      context_length: 8192
+      max_steps: 8324
+      planned_training_flops: 9899423883164631040
+      planned_training_tokens: 4364173312
+      flops_per_token_numerator: 18582231880640
+      flops_per_token_denominator: 8192
+      warmup_steps: 333
+      cooldown_steps: 2497
+      final_lr_ratio: 0.01
+    stages:
+    - stage: short
+      stage_index: 0
+      length: 2048
+      micro_batch_size: 4
+      grad_accum_steps: 8
+      tokens_per_update: 524288
+      requested_flops_fraction: 0.5
+      first_step: 1
+      last_step: 4459
+      steps: 4459
+      flops_per_update: 1109838291857408
+      flops: 4948768943392182272
+      cumulative_flops: 4948768943392182272
+    - stage: medium
+      stage_index: 1
+      length: 4096
+      micro_batch_size: 2
+      grad_accum_steps: 8
+      tokens_per_update: 524288
+      requested_flops_fraction: 0.2
+      first_step: 4460
+      last_step: 6201
+      steps: 1742
+      flops_per_update: 1136258783178752
+      flops: 1979362800297385984
+      cumulative_flops: 6928131743689568256
+    - stage: full
+      stage_index: 2
+      length: 8192
+      micro_batch_size: 1
+      grad_accum_steps: 8
+      tokens_per_update: 524288
+      requested_flops_fraction: 0.3
+      first_step: 6202
+      last_step: 8699
+      steps: 2498
+      flops_per_update: 1189425512247296
+      flops: 2971184929593745408
+      cumulative_flops: 9899316673283313664
+    max_steps: 8699
+    planned_training_flops: 9899316673283313664
+    planned_training_tokens: 4560781312
+    unused_reference_flops: 107209881317376
+    accounting:
+      kind: e16_baseline_matched_with_residual_upper_bounds
+      official_ledger: false
+      length_formula: c(L)=c(8192)-attention_layers*6*hidden*(8192-L)-branch_cost(8192)+branch_cost(L);
+        branch_cost uses floor(L/compression_block)+residual_extra_flops_per_token
+      fraction_basis: FLOPs budget; final stage receives complete updates from the
+        remainder
+      limitations: Analytical estimate inherited from the baseline. Length-dependent
+        softmax and GDN boundary terms are held fixed. The compressed branch retains
+        its 3x-forward upper estimate. Optimizer updates, FP32 master copies, communication,
+        activation recomputation and training-loss softmax/CE are outside this prediction-graph
+        ledger. Runtime numerical fallback costs require separate reporting.
+      additional_residual_parameters: 18
+      dual_residual_extra_training_flops_per_token_upper_bound: 282624
+      value_residual_extra_training_flops_per_token_upper_bound: 27648
+      residual_extra_flops_per_token: 310272
+      dual_formula: (64 * 4 + 20) * 1024 = 282624
+      value_formula: 9 * 3 * 1024 = 27648
+      full_length_flops_per_token_numerator: 290387087951
+      full_length_flops_per_token_denominator: 128
+      residual_scope: Four dual-stream tail blocks and three value residual connections,
+        8192 positions per rank microbatch at lengths 2048/4096/8192, no activation
+        recomputation. Conservative forward/backward arithmetic allowances inherit
+        the E16 reference and can double-count shared baseline additions.
+  fp32_master_weights: true
+optimizer:
+  name: muon
+  learning_rate: 0.003
+  scalar_learning_rate: 0.000265
+  betas:
+  - 0.9
+  - 0.95
+  eps: 1.0e-08
+  momentum: 0.95
+  weight_decay: 0.1
+  adjust_lr: rms_norm
+  expert_wise: true
+  nesterov: false
+  use_triton: false
+  compressed_branch: adamw
+scheduler:
+  name: linear_cooldown
+  warmup_steps: 357
+  cooldown_steps: 2497
+  final_lr_ratio: 0.01
+  warmup_fraction: 0.04000480538202787
+  cooldown_fraction: 0.2999759730898606
+data:
+  tokenizer_path: null
+  train_path: null
+  validation_path: null
+  format: npy_packed_tokens
+  requires_document_boundaries: true
+logging:
+  backend: wandb
+  entity: echo-lab
+  project: scicomp26
+  log_every_steps: 5
+  eval_every_steps: 8699
+  eval_batches: 8
+  final_eval_batches: 64
+  checkpoint_every_steps: 8699
+  checkpoint_steps:
+  - 870
+  - 1740
+  - 2610
+  - 3480
+  - 4350
+  - 5219
+  - 6089
+  - 6959
+  - 7829
+  checkpoint_keep_last: 2
+output:
+  directory: runs/submission_20261103/1e19_1
+submission:
+  target_date: '2026-11-03'
+  budget_tier: 1e19
+  data_parallel_size: 8
+initialization:
+  projection_scale: 0.8
+  repair_gdn_a_log: true

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Single-node, multi-GPU Transformers evaluation: JSONL -> packing -> bpb/EvalTime.
+"""Evaluate HF models on JSONL or an existing token cache: bpb/EvalTime.
 
 Warms each batch shape five times before one complete evaluation.
 EvalTime counts only forward (including the vocabulary projection), in
@@ -62,8 +62,26 @@ def packed_batch(tokens, is_text, start, stop, sequence_length, pad_token_id):
         length = min(sequence_length, len(tokens) - 1 - offset)
         inputs[row, :length] = tokens[offset:offset + length]
         target_slice = slice(offset + 1, offset + length + 1)
-        labels[row, :length] = np.where(is_text[target_slice], tokens[target_slice], -100)
+        labels[row, :length] = np.where(
+            is_text[target_slice], np.asarray(tokens[target_slice], dtype=np.int64), -100
+        )
     return inputs, labels
+
+
+def load_evaluation_cache(directory, model_path, config):
+    """Read the saved validation tokens, text mask and original UTF-8 byte count."""
+    from packed_cache import load_packed_cache, model_tokenizer_sha256, validate_packed_identity
+
+    tokens, mask, metadata = load_packed_cache(directory)
+    checkpoint_data = dict(
+        vocab_size=config.vocab_size, eos_token_id=config.eos_token_id,
+        tokenizer_json_sha256=model_tokenizer_sha256(model_path),
+    )
+    identity = validate_packed_identity(metadata, checkpoint_data, config.vocab_size, tokens=tokens)
+    source = dict(kind='packed', path=str(Path(directory).resolve()),
+                  total_bytes=metadata['total_bytes'], total_tokens=metadata['total_tokens'],
+                  identity=identity)
+    return tokens, mask, metadata, source
 
 
 def active_parameter_count(model):
@@ -84,9 +102,12 @@ def active_parameter_count(model):
     return sum(p.numel() for p in model.parameters() if id(p) not in excluded)
 
 
-def parse_args():
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--dataset-path", type=Path, required=True, help="JSONL with a text field")
+    data = parser.add_mutually_exclusive_group(required=True)
+    data.add_argument("--dataset-path", type=Path, help="JSONL with a text field")
+    data.add_argument("--packed-cache-dir", type=Path,
+                      help="Existing cache with validation.npy, validation_is_text.npy and metadata.json")
     parser.add_argument("--model-path", required=True, help="Local Transformers checkpoint")
     parser.add_argument("--batch-size", type=int, default=32, help="Sequences per GPU")
     parser.add_argument("--sequence-length", type=int, default=8192)
@@ -95,7 +116,7 @@ def parse_args():
         help="none=BF16 baseline, ffn_rmsnorm=FFN and RMSNorm fusion",
     )
     parser.add_argument("--output", type=Path, default=Path("result.json"))
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if not 1 <= args.sequence_length <= 8192:
         parser.error("--sequence-length must be between 1 and 8192")
     if args.batch_size < 1:
@@ -110,7 +131,7 @@ def main():
     import torch
     import torch.distributed as dist
     import torch.nn.functional as F
-    from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, set_seed
+    from transformers import AutoConfig, AutoModelForCausalLM, set_seed
 
     rank = int(os.environ["LOCAL_RANK"])
     device = torch.device("cuda", rank)
@@ -119,30 +140,41 @@ def main():
     set_seed(0)
     args.output.parent.mkdir(parents=True, exist_ok=True)
 
-    # Only rank 0 tokenizes. Other ranks open the same temporary files read-only.
+    config = AutoConfig.from_pretrained(
+        args.model_path, local_files_only=True, trust_remote_code=True
+    ).get_text_config()
+    # Packed mode opens existing read-only arrays without tokenizing anything.
+    # JSONL mode packs only on rank 0, preserving the original evaluation path.
     temporary = None
-    shared = [None]
-    if rank == 0:
-        temporary = tempfile.TemporaryDirectory(prefix=".eval-", dir=args.output.parent)
-        cache_dir = Path(temporary.name).resolve()
-        tokenizer = AutoTokenizer.from_pretrained(
-            args.model_path, local_files_only=True, trust_remote_code=True
+    if args.packed_cache_dir is not None:
+        tokens, is_text, metadata, data_source = load_evaluation_cache(
+            args.packed_cache_dir, args.model_path, config,
         )
-        metadata = pack_jsonl(args.dataset_path, tokenizer, cache_dir)
-        shared[0] = (str(cache_dir), metadata)
-        print(f"Packed {metadata['total_tokens']} text tokens", flush=True)
-    dist.broadcast_object_list(shared, src=0, device=device)
-    cache_path, metadata = shared[0]
-    tokens = np.memmap(Path(cache_path) / "tokens.bin", dtype=np.int32, mode="r")
-    is_text = np.memmap(Path(cache_path) / "is_text.bin", dtype=np.bool_, mode="r")
+        if rank == 0:
+            print(f"Using cached validation: {metadata['total_tokens']} text tokens", flush=True)
+    else:
+        shared = [None]
+        if rank == 0:
+            from transformers import AutoTokenizer
+
+            temporary = tempfile.TemporaryDirectory(prefix=".eval-", dir=args.output.parent)
+            cache_dir = Path(temporary.name).resolve()
+            tokenizer = AutoTokenizer.from_pretrained(
+                args.model_path, local_files_only=True, trust_remote_code=True
+            )
+            metadata = pack_jsonl(args.dataset_path, tokenizer, cache_dir)
+            shared[0] = (str(cache_dir), metadata)
+            print(f"Packed {metadata['total_tokens']} text tokens", flush=True)
+        dist.broadcast_object_list(shared, src=0, device=device)
+        cache_path, metadata = shared[0]
+        tokens = np.memmap(Path(cache_path) / "tokens.bin", dtype=np.int32, mode="r")
+        is_text = np.memmap(Path(cache_path) / "is_text.bin", dtype=np.bool_, mode="r")
+        data_source = dict(kind='jsonl', path=str(args.dataset_path.resolve()),
+                           total_bytes=metadata['total_bytes'], total_tokens=metadata['total_tokens'])
     num_sequences = math.ceil((len(tokens) - 1) / args.sequence_length)
     global_batch_size = args.batch_size * dist.get_world_size()
     num_steps = math.ceil(num_sequences / global_batch_size)
 
-    config = AutoConfig.from_pretrained(
-        args.model_path, local_files_only=True, trust_remote_code=True
-    )
-    config = config.get_text_config()
     model, loading_info = AutoModelForCausalLM.from_pretrained(
         args.model_path, config=config, dtype=torch.bfloat16, attn_implementation="sdpa",
         local_files_only=True, trust_remote_code=True, output_loading_info=True,
@@ -245,6 +277,7 @@ def main():
             fusion=fusion_info, active_parameters=active_params,
             forward_seconds=forward_seconds,
             scored_tokens=count_tensor.item(),
+            data_source=data_source,
         )
         args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
         print(json.dumps(result, ensure_ascii=False), flush=True)

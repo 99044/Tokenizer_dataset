@@ -23,8 +23,10 @@ def hybrid_hf_config(settings, vocab_size):
         raise ValueError('Hybrid export requires the checkpoint vocabulary and BF16 training')
     compressed = model.get('compressed_attention')
     if compressed is not None:
-        if not isinstance(compressed, dict) or compressed.get('block_size') != 128:
-            raise ValueError('compressed_attention must use 128-token blocks')
+        if (not isinstance(compressed, dict) or isinstance(compressed.get('block_size'), bool)
+                or not isinstance(compressed.get('block_size'), int)
+                or not 1 <= compressed['block_size'] <= model['context_length']):
+            raise ValueError('compressed_attention block_size must fit the context length')
         index = compressed.get('layer_index')
         if not isinstance(index, int) or not 0 <= index < model['num_layers'] or index % 4 != 3:
             raise ValueError('compressed_attention must attach to a full-attention layer')

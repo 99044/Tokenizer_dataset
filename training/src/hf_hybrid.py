@@ -329,7 +329,7 @@ class PostNormGDNLayer(GradientCheckpointingLayer):
 
 
 class CompressedKVBranch(nn.Module):
-    """Exact 128-token causal compressed branch used by the native checkpoint."""
+    """Causal compressed branch using the checkpoint's block size."""
 
     def __init__(self, hidden_size, num_heads, block_size, intermediate_size):
         super().__init__()

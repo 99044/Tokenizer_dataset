@@ -1,6 +1,6 @@
-"""E15/E16 length schedules derived from each tier's full-length FLOPs plan.
+"""E16 length schedules derived from each tier's full-length FLOPs plan.
 
-Attention GEMM length deltas follow E15, with E16 residual allowances for 3e17.
+Attention GEMM length deltas follow E15, with E16 residual allowances.
 The baseline's compressed-branch 3x-forward estimate and other analytical
 accounting limitations are inherited.
 """
@@ -39,8 +39,8 @@ def _integer(value, name, minimum=1):
 def _build_curriculum(settings, reference):
     model = settings["model"]
     tier = settings["submission"]["budget_tier"]
-    if tier not in {"3e17", "1e18", "3e18"}:
-        raise ValueError("Length + FP32 curriculum is configured only for 3e17, 1e18 and 3e18")
+    if tier not in {"3e17", "1e18", "3e18", "1e19"}:
+        raise ValueError("Unsupported length + FP32 curriculum tier")
     if model["context_length"] != 8192 or reference["context_length"] != 8192:
         raise ValueError("The curriculum requires an 8192-token baseline")
     world = _integer(settings["submission"]["data_parallel_size"], "data_parallel_size")
@@ -78,8 +78,8 @@ def _build_curriculum(settings, reference):
     attention_layers = len(attention_indices)
     branch = model.get("compressed_attention")
     block_size = _integer(branch["block_size"], "compression block_size") if branch else None
-    if block_size and any(length % block_size for _, length, _ in STAGES):
-        raise ValueError("Every curriculum length must contain complete compression blocks")
+    if block_size and any(length < block_size for _, length, _ in STAGES):
+        raise ValueError("Every curriculum length must contain a compression block")
     cost = Fraction(
         _integer(reference["flops_per_token_numerator"], "baseline FLOPs numerator"),
         _integer(reference["flops_per_token_denominator"], "baseline FLOPs denominator"),
@@ -93,40 +93,45 @@ def _build_curriculum(settings, reference):
     if budget > _integer(settings["budget"]["total_training_flops"], "total_training_flops"):
         raise ValueError("Baseline planned FLOPs exceed the nominal budget")
     accounting = dict(ACCOUNTING)
-    kind = "e15_length_fp32"
-    if tier == "3e17":
-        if model.get("dual_residual") != dict(enabled=True, start_layer=8, cross_mix_init=0.25):
-            raise ValueError("3e17 E16 requires the four-tail-block dual-residual configuration")
+    if block_size and any(length % block_size for _, length, _ in STAGES):
+        accounting["length_formula"] = (
+            "c(L)=c(8192)-attention_layers*6*hidden*(8192-L)"
+            "-branch_cost(8192)+branch_cost(L); branch_cost uses floor(L/compression_block)"
+        )
+    kind = "e16_dual_length_fp32"
+    if tier in {"3e17", "1e18", "3e18", "1e19"}:
+        start_layer = 12 if tier == "1e19" else 8
+        expected_layers = 16 if tier == "1e19" else 12
+        expected_attention = list(range(3, expected_layers, 4))
+        if model.get("dual_residual") != dict(enabled=True, start_layer=start_layer, cross_mix_init=0.25):
+            raise ValueError("E16 requires the four-tail-block dual-residual configuration")
         if model.get("value_residual") != dict(enabled=True, first_layer_weight=0.5):
-            raise ValueError("3e17 E16 requires value residual with first_layer_weight=0.5")
+            raise ValueError("E16 requires value residual with first_layer_weight=0.5")
         if (
-            layers != 12 or hidden != 256 or attention_indices != [3, 7, 11]
-            or model["num_key_value_heads"] * model["attention_head_dim"] != 256
+            layers != expected_layers or attention_indices != expected_attention
+            or model["num_key_value_heads"] * model["attention_head_dim"] != hidden
             or settings["scaling"].get("additional_residual_parameters") != 18
         ):
-            raise ValueError("3e17 E16 residual accounting requires its declared model dimensions")
-        dual_flops = (64 * (layers - 8) + 20) * hidden
+            raise ValueError("E16 residual accounting requires its declared model dimensions")
+        dual_flops = (64 * (layers - start_layer) + 20) * hidden
         value_flops = 9 * (attention_layers - 1) * model["num_key_value_heads"] * model["attention_head_dim"]
         cost += dual_flops + value_flops
-        kind = "e16_dual_length_fp32"
         accounting.update(
             kind="e16_baseline_matched_with_residual_upper_bounds",
-            length_formula=ACCOUNTING["length_formula"] + "+residual_extra_flops_per_token",
+            length_formula=accounting["length_formula"] + "+residual_extra_flops_per_token",
             additional_residual_parameters=18,
             dual_residual_extra_training_flops_per_token_upper_bound=dual_flops,
             value_residual_extra_training_flops_per_token_upper_bound=value_flops,
             residual_extra_flops_per_token=dual_flops + value_flops,
-            dual_formula="(64 * 4 + 20) * 256 = 70656",
-            value_formula="9 * 2 * 256 = 4608",
+            dual_formula=f"(64 * {layers - start_layer} + 20) * {hidden} = {dual_flops}",
+            value_formula=f"9 * {attention_layers - 1} * {hidden} = {value_flops}",
             full_length_flops_per_token_numerator=cost.numerator,
             full_length_flops_per_token_denominator=cost.denominator,
-            residual_scope="Four dual-stream tail blocks and two value residual connections, "
+            residual_scope=f"Four dual-stream tail blocks and {'two' if attention_layers == 3 else 'three'} value residual connections, "
             "8192 positions per rank microbatch at lengths 2048/4096/8192, no activation "
             "recomputation. Conservative forward/backward arithmetic allowances inherit "
             "the E16 reference and can double-count shared baseline additions.",
         )
-    elif model.get("dual_residual") or model.get("value_residual"):
-        raise ValueError("The E15 tiers require their original residual architecture")
     warmup = Fraction(_integer(reference["warmup_steps"], "baseline warmup_steps", 0), baseline_steps)
     cooldown = Fraction(_integer(reference["cooldown_steps"], "baseline cooldown_steps", 0), baseline_steps)
     if not 0 <= warmup < 1 or not 0 < cooldown < 1 or warmup + cooldown > 1:
@@ -140,7 +145,15 @@ def _build_curriculum(settings, reference):
     for index, (name, length, fraction) in enumerate(STAGES):
         stage_cost = cost - attention_layers * 6 * hidden * (8192 - length)
         if block_size:
-            stage_cost -= 3 * 4 * hidden * (8192 // block_size - length // block_size)
+            branch_width = _integer(branch["intermediate_size"], "compression intermediate_size")
+            def branch_cost(sequence_length):
+                blocks = sequence_length // block_size
+                forward = Fraction(
+                    4 * blocks * block_size * hidden * hidden + 8 * blocks * hidden * branch_width,
+                    sequence_length,
+                ) + 4 * hidden * blocks
+                return math.ceil(3 * forward)
+            stage_cost -= branch_cost(8192) - branch_cost(length)
         per_update = stage_cost * tokens
         if per_update <= 0 or per_update.denominator != 1:
             raise ValueError("Stage update FLOPs must be positive whole numbers")
