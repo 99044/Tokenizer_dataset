@@ -13,6 +13,21 @@ import torch.nn as nn
 from compressed_attention import CompressedKVBranch
 
 
+class AdamWDtypeBuckets:
+    """Keep Dion's fused AdamW calls homogeneous without changing saved groups."""
+
+    def _create_adamw_tasks(self, param_groups):
+        for group in param_groups:
+            buckets = {}
+            for parameter in group['params']:
+                key = (parameter.device, parameter.dtype, parameter.layout)
+                buckets.setdefault(key, []).append(parameter)
+            for parameters in buckets.values():
+                yield from super()._create_adamw_tasks([
+                    dict(group, params=parameters)
+                ])
+
+
 @dataclass(frozen=True)
 class NamedParameterGroup:
     name: str
@@ -225,7 +240,10 @@ def build_optimizer(
             optimizer_kwargs["muon_beta2"] = _positive_float(
                 config.get("muon_beta2", 0.95), "muon_beta2"
             )
-        optimizer = optimizer_class(parameter_groups, **optimizer_kwargs)
+        class CompatibleOptimizer(AdamWDtypeBuckets, optimizer_class):
+            pass
+
+        optimizer = CompatibleOptimizer(parameter_groups, **optimizer_kwargs)
         return optimizer, _report(name, groups)
 
     if name == "soap":
