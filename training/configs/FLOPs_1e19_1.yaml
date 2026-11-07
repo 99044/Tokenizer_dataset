@@ -75,6 +75,8 @@ training:
   micro_batch_size: 1
   gradient_accumulation_steps: 8
   gradient_checkpointing: false
+  gdn_fp32_retry_grad_norm: 100.0
+  gdn_fp32_recovery_steps: 16
   length_curriculum:
     kind: e16_dual_length_fp32
     version: 1

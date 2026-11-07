@@ -63,6 +63,36 @@ def configured_steps(settings, key):
     return set(values)
 
 
+def record_gradient_anomaly(model, output_dir, rank, step, grad_norm, loss, lr, precision):
+    """Persist a large spike or a nonfinite gradient with parameter names."""
+    def safe_scalar(value):
+        number = float(value)
+        return number if math.isfinite(number) else str(number)
+
+    details = []
+    for name, parameter in model.named_parameters():
+        gradient = parameter.grad
+        if gradient is None:
+            continue
+        finite = bool(torch.isfinite(gradient).all().item())
+        absmax = float(gradient.detach().float().abs().max().item()) if finite else None
+        details.append({'name': name, 'finite': finite, 'postclip_absmax': absmax})
+    largest = sorted((item for item in details if item['finite']),
+                     key=lambda item: item['postclip_absmax'], reverse=True)[:12]
+    event = {
+        'event': 'gradient_anomaly', 'rank': rank, 'step': step,
+        'gdn_recurrence_precision': precision,
+        'preclip_grad_norm': safe_scalar(grad_norm.item()),
+        'local_loss': safe_scalar(loss.item()), 'learning_rate': lr,
+        'nonfinite': [item['name'] for item in details if not item['finite']],
+        'largest_postclip_gradients': largest,
+    }
+    path = output_dir / f'gradient-anomalies-rank-{rank}.jsonl'
+    with path.open('a') as stream:
+        stream.write(json.dumps(event, allow_nan=False) + '\n')
+    print(json.dumps(event, allow_nan=False), flush=True)
+
+
 def validate_branch_checkpoint(checkpoint, settings, metadata, plan):
     continuation = settings.get('continuation')
     if not isinstance(continuation, dict):
@@ -398,7 +428,25 @@ def main():
                 raise RuntimeError(f'W&B initialization failed: {wandb_error[0]}')
         dist.barrier()
         run_started = time.perf_counter()
-        gdn_guard = install_gdn_stability_guard(args.output_dir, rank)
+        force_fp32_gdn = settings['training'].get('gdn_recurrent_fp32', False)
+        if not isinstance(force_fp32_gdn, bool):
+            raise ValueError('training.gdn_recurrent_fp32 must be a boolean')
+        retry_threshold = settings['training'].get('gdn_fp32_retry_grad_norm')
+        if retry_threshold is not None and (
+            isinstance(retry_threshold, bool)
+            or not isinstance(retry_threshold, (int, float))
+            or not math.isfinite(retry_threshold)
+            or retry_threshold <= 0
+        ):
+            raise ValueError('training.gdn_fp32_retry_grad_norm must be a positive finite number')
+        recovery_steps = settings['training'].get('gdn_fp32_recovery_steps', 16)
+        if isinstance(recovery_steps, bool) or not isinstance(recovery_steps, int) or recovery_steps < 1:
+            raise ValueError('training.gdn_fp32_recovery_steps must be a positive integer')
+        gdn_guard = install_gdn_stability_guard(args.output_dir, rank, force_fp32_gdn)
+        if rank == 0:
+            print(f'GDN recurrence precision: {"fp32" if force_fp32_gdn else "model_dtype_with_fallback"}; '
+                  f'fp32_retry_grad_norm={retry_threshold}; fp32_recovery_steps={recovery_steps}', flush=True)
+        fp32_recovery_until = 0
 
         for step in range(start_step + 1, stop_step + 1):
             step_started = time.perf_counter()
@@ -411,25 +459,58 @@ def main():
                     args.data_dir / 'train.npy', sequence_length, vocab_size, seed + rank, metadata,
                 )
             train = train_samplers[sequence_length]
-            # 可由 seed/step/rank 重建采样位置，恢复时不需要保存 NumPy 状态。
-            train.rng = np.random.default_rng(np.random.SeedSequence([seed, step, rank]))
-            optimizer.zero_grad(set_to_none=True)
-            local_loss = torch.zeros((), device=device)
             used_lr = float(optimizer.param_groups[0]['lr'])
             used_group_lrs = [float(group['lr']) for group in optimizer.param_groups]
-            for micro_step in range(grad_accum_steps):
-                gdn_guard.set_context(step, micro_step)
-                sync = micro_step == grad_accum_steps - 1
-                with nullcontext() if sync else ddp.no_sync():
-                    inputs, labels = train.batch(micro_batch_size, device)
-                    logits = ddp(inputs)
-                    loss = F.cross_entropy(logits.float().reshape(-1, vocab_size), labels.reshape(-1))
-                    (loss / grad_accum_steps).backward()
-                    local_loss += loss.detach() / grad_accum_steps
-                del inputs, labels, logits, loss
-            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            if not torch.isfinite(grad_norm).item():
-                raise RuntimeError('梯度包含非有限值，请检查数据、学习率和数值精度')
+            step_cpu_rng = torch.get_rng_state()
+            step_cuda_rng = torch.cuda.get_rng_state(device)
+            fp32_step = force_fp32_gdn or step <= fp32_recovery_until
+            retried_fp32 = False
+            while True:
+                if retried_fp32:
+                    # The retry must use the same tokens and stochastic model state.
+                    torch.set_rng_state(step_cpu_rng)
+                    torch.cuda.set_rng_state(step_cuda_rng, device=device)
+                gdn_guard.force_fp32 = fp32_step
+                # Sampling positions are reproducible from seed/step/rank.
+                train.rng = np.random.default_rng(np.random.SeedSequence([seed, step, rank]))
+                optimizer.zero_grad(set_to_none=True)
+                local_loss = torch.zeros((), device=device)
+                for micro_step in range(grad_accum_steps):
+                    gdn_guard.set_context(step, micro_step)
+                    sync = micro_step == grad_accum_steps - 1
+                    with nullcontext() if sync else ddp.no_sync():
+                        inputs, labels = train.batch(micro_batch_size, device)
+                        logits = ddp(inputs)
+                        loss = F.cross_entropy(logits.float().reshape(-1, vocab_size), labels.reshape(-1))
+                        (loss / grad_accum_steps).backward()
+                        local_loss += loss.detach() / grad_accum_steps
+                    del inputs, labels, logits, loss
+                grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                local_bad = not bool(torch.isfinite(grad_norm).item()) or not bool(torch.isfinite(local_loss).item())
+                local_spike = retry_threshold is not None and grad_norm.item() > retry_threshold
+                if retry_threshold is not None:
+                    bad_on_any_rank = torch.tensor(int(local_bad or local_spike), device=device)
+                    dist.all_reduce(bad_on_any_rank, op=dist.ReduceOp.MAX)
+                    bad_on_any_rank = bool(bad_on_any_rank.item())
+                else:
+                    bad_on_any_rank = local_bad
+                if bad_on_any_rank and retry_threshold is not None and not fp32_step:
+                    if local_bad or local_spike:
+                        record_gradient_anomaly(model, args.output_dir, rank, step, grad_norm,
+                                                local_loss, used_lr, 'model_dtype')
+                    # No optimizer update has occurred. Drop every bad gradient and
+                    # recompute the entire step with the GDN recurrence in IEEE FP32.
+                    retried_fp32 = True
+                    fp32_step = True
+                    fp32_recovery_until = step + recovery_steps - 1
+                    continue
+                if bad_on_any_rank:
+                    record_gradient_anomaly(model, args.output_dir, rank, step, grad_norm,
+                                            local_loss, used_lr, 'fp32' if fp32_step else 'model_dtype')
+                    raise RuntimeError('FP32 GDN 步的梯度仍异常；详见 gradient-anomalies-rank-*.jsonl'
+                                       if fp32_step else '梯度包含非有限值；详见 gradient-anomalies-rank-*.jsonl')
+                break
+            gdn_guard.force_fp32 = force_fp32_gdn
             optimizer.step()
             scheduler.step()
             dist.all_reduce(local_loss)
@@ -444,6 +525,8 @@ def main():
                 'train/step_seconds': step_seconds,
                 'train/tokens_per_second': tokens_per_step / step_seconds,
                 'train/grad_norm': grad_norm.item(),
+                'train/gdn_fp32_retried': int(retried_fp32),
+                'train/gdn_fp32_recovery_step': int(fp32_step and not retried_fp32),
                 'system/max_memory_allocated_bytes': torch.cuda.max_memory_allocated(device),
                 'system/max_memory_reserved_bytes': torch.cuda.max_memory_reserved(device),
             }

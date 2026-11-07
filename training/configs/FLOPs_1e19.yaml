@@ -67,6 +67,8 @@ training:
   micro_batch_size: 1
   gradient_accumulation_steps: 8
   gradient_checkpointing: false
+  gdn_fp32_retry_grad_norm: 100.0
+  gdn_fp32_recovery_steps: 16
 optimizer:
   name: muon
   learning_rate: 0.003

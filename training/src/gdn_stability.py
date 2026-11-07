@@ -1,4 +1,4 @@
-"""Recompute a nonfinite GDN chunk result with the same operator in IEEE FP32."""
+"""Run GDN chunks in model precision, with selective IEEE FP32 recomputation."""
 
 import json
 import os
@@ -9,10 +9,11 @@ import torch
 
 
 class GDNStabilityGuard:
-    def __init__(self, original, output_dir, rank):
+    def __init__(self, original, output_dir, rank, force_fp32=False):
         self.original = original
         self.output_dir = Path(output_dir)
         self.rank = rank
+        self.force_fp32 = force_fp32
         self.context = {}
         self.fallback_count = 0
         self.call_index = 0
@@ -28,6 +29,20 @@ class GDNStabilityGuard:
                          use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel, cu_seqlens=cu_seqlens)
         ordinal = self.call_index
         self.call_index += 1
+        if self.force_fp32:
+            promoted = dict(arguments)
+            for name in ['q', 'k', 'v', 'g', 'beta', 'initial_state']:
+                if isinstance(promoted[name], torch.Tensor):
+                    promoted[name] = promoted[name].float()
+            output32, state32 = self.original(**promoted)
+            if not torch.isfinite(output32).all().item():
+                raise RuntimeError('GDN IEEE FP32 recurrence output is nonfinite')
+            if state32 is not None and not torch.isfinite(state32).all().item():
+                raise RuntimeError('GDN IEEE FP32 recurrence state is nonfinite')
+            corrected = output32.to(q.dtype)
+            if not torch.isfinite(corrected).all().item():
+                raise RuntimeError('GDN IEEE FP32 recurrence exceeds the model dtype')
+            return corrected, state32
         result = self.original(**arguments)
         output, state = result
         output_finite = bool(torch.isfinite(output).all().item())
@@ -71,12 +86,14 @@ class GDNStabilityGuard:
 _guard = None
 
 
-def install_gdn_stability_guard(output_dir, rank):
+def install_gdn_stability_guard(output_dir, rank, force_fp32=False):
     global _guard
     if os.environ.get('TRITON_F32_DEFAULT') != 'ieee':
         raise RuntimeError('GDN stability requires TRITON_F32_DEFAULT=ieee')
     if _guard is None:
         import olmo_core.nn.attention.recurrent as recurrent
-        _guard = GDNStabilityGuard(recurrent.dispatch_chunk_gated_delta_rule, output_dir, rank)
+        _guard = GDNStabilityGuard(recurrent.dispatch_chunk_gated_delta_rule, output_dir, rank, force_fp32)
         recurrent.dispatch_chunk_gated_delta_rule = _guard
+    elif _guard.force_fp32 != force_fp32:
+        raise RuntimeError('GDN recurrence precision cannot change within a process')
     return _guard
