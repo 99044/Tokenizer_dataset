@@ -13,6 +13,20 @@
 
 在已安装训练依赖的 GPU 环境中，可用 `run_1e19_1.sh` 直接启动这份配置，不经过 Docker。它接受 `--gpus`、`--data-dir`、`--eval-cache-dir`、`--tokenizer-dir`、`--output-dir`，先核对数据与分词器，再训练、导出 HF，并用预分词评测缓存执行单卡 batch 32、FFN＋RMSNorm 融合评测。输出包含 `train.log`、`export.log`、`eval.log`、`summary.json` 和最多两个滚动训练 checkpoint。训练意外退出后，若已有完整 checkpoint，入口会从最近一步续训；重复无进展会停止并记录到 `auto-resume.tsv`。重新运行已建立的输出目录须加 `--resume`，只做导出与评测可加 `--evaluate-only`，只检查环境可加 `--preflight-only`。
 
+一次运行四档时，使用 `run_submission_all.sh`。它依次运行 `3e17 → 1e18 → 3e18 → 1e19`，每档复用同一组 8 张 GPU，完成训练、HF 导出和评测后进入下一档：
+
+```bash
+bash run_submission_all.sh \
+  --gpus 0,1,2,3,4,5,6,7 \
+  --data-dir /path/to/24k-tokenized-data \
+  --eval-cache-dir /path/to/packed-eval-cache \
+  --tokenizer-dir /path/to/24k-tokenizer \
+  --output-dir /mnt/experiments/submission_20261107 \
+  --resume
+```
+
+每档输出保存在 `--output-dir/<档位>/`，其中 `hf-model/` 是导出的 HF 模型，`result.json` 是评测结果。`--resume` 对已有档位目录启用续跑，对未建立的目录正常开始；已完成档位会核对并复用结果。任一档位失败时停止队列，修复后重新执行同一命令即可。追加 `--dry-run` 可预览四档配置及命令。只运行 3e17 档时可用 `run_submission_20261107.sh`，其 `--output-dir` 直接指定该档目录。
+
 实际步数和 token 以 YAML 的 `training` 与 `budget` 字段为准。四档按 8 卡 DDP 配置，梯度累积分别为 4、4、8、8。8192 上下文时每卡 micro batch 为 1。模型使用 BF16 计算，前三档使用 FP32 主权重、主干 SOAP、压缩分支 AdamW；1e19 档主干 Muon、压缩分支 AdamW。峰值学习率均为 0.003。前三档按累计 FLOPs 约 5% warmup、约 70% 后线性 cooldown 至 3e-5；1e19 档按步数 4% warmup、最后 30% 线性 cooldown 至 3e-5。初始化时主干指定投影和 embedding 权重乘以 0.8，压缩分支的输出另乘对应 YAML 中的系数。每档训练进度约每 10% 保存一次，自动只保留最近两个完整 checkpoint。中断后用相同 YAML、数据和 GPU 数量传 `--resume` 继续。
 
 前三档的第 9 至 12 层使用持续双流残差，初始交叉混合比例为 0.25，每行总增益为 2，末层初始合并权重各为 0.5。第 8、12 层 Attention 将当前 V 与第 4 层 V 按各 0.5 混合，梯度回传至第 4 层。每档新增 18 个 FP32 混合参数，纳入 FP32 主权重和优化器。训练、原生评测及 HF 导出均加载这两项结构。更改模型结构或更新计划后需从头训练，后续仅使用同一配置的 checkpoint 续训。
