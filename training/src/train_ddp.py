@@ -18,7 +18,7 @@ import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from fp32_master import FP32MasterWeights
-from gdn_stability import install_gdn_stability_guard
+from gdn_stability import gradient_recovery_action, install_gdn_stability_guard
 from compressed_attention import attach_compressed_attention
 from dual_residual import attach_dual_residual
 from value_residual import attach_value_residual
@@ -63,7 +63,8 @@ def configured_steps(settings, key):
     return set(values)
 
 
-def record_gradient_anomaly(model, output_dir, rank, step, grad_norm, loss, lr, precision):
+def record_gradient_anomaly(model, output_dir, rank, step, grad_norm, loss, lr, precision,
+                            action=None):
     """Persist a large spike or a nonfinite gradient with parameter names."""
     def safe_scalar(value):
         number = float(value)
@@ -82,6 +83,7 @@ def record_gradient_anomaly(model, output_dir, rank, step, grad_norm, loss, lr, 
     event = {
         'event': 'gradient_anomaly', 'rank': rank, 'step': step,
         'gdn_recurrence_precision': precision,
+        'action': action,
         'preclip_grad_norm': safe_scalar(grad_norm.item()),
         'local_loss': safe_scalar(loss.item()), 'learning_rate': lr,
         'nonfinite': [item['name'] for item in details if not item['finite']],
@@ -488,27 +490,33 @@ def main():
                 grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 local_bad = not bool(torch.isfinite(grad_norm).item()) or not bool(torch.isfinite(local_loss).item())
                 local_spike = retry_threshold is not None and grad_norm.item() > retry_threshold
-                if retry_threshold is not None:
-                    bad_on_any_rank = torch.tensor(int(local_bad or local_spike), device=device)
-                    dist.all_reduce(bad_on_any_rank, op=dist.ReduceOp.MAX)
-                    bad_on_any_rank = bool(bad_on_any_rank.item())
-                else:
-                    bad_on_any_rank = local_bad
-                if bad_on_any_rank and retry_threshold is not None and not fp32_step:
+                flags = torch.tensor([int(local_bad), int(local_spike)], device=device)
+                dist.all_reduce(flags, op=dist.ReduceOp.MAX)
+                nonfinite_on_any_rank, spike_on_any_rank = map(bool, flags.tolist())
+                action = gradient_recovery_action(
+                    nonfinite_on_any_rank, spike_on_any_rank, fp32_step,
+                    retry_threshold is not None,
+                )
+                if action == 'retry_fp32':
                     if local_bad or local_spike:
                         record_gradient_anomaly(model, args.output_dir, rank, step, grad_norm,
-                                                local_loss, used_lr, 'model_dtype')
+                                                local_loss, used_lr, 'model_dtype', action)
                     # No optimizer update has occurred. Drop every bad gradient and
                     # recompute the entire step with the GDN recurrence in IEEE FP32.
                     retried_fp32 = True
                     fp32_step = True
                     fp32_recovery_until = step + recovery_steps - 1
                     continue
-                if bad_on_any_rank:
+                if action == 'abort_nonfinite':
                     record_gradient_anomaly(model, args.output_dir, rank, step, grad_norm,
-                                            local_loss, used_lr, 'fp32' if fp32_step else 'model_dtype')
-                    raise RuntimeError('FP32 GDN 步的梯度仍异常；详见 gradient-anomalies-rank-*.jsonl'
+                                            local_loss, used_lr, 'fp32' if fp32_step else 'model_dtype',
+                                            action)
+                    raise RuntimeError('FP32 GDN 重算后仍有非有限 loss 或梯度；详见 gradient-anomalies-rank-*.jsonl'
                                        if fp32_step else '梯度包含非有限值；详见 gradient-anomalies-rank-*.jsonl')
+                if action == 'accept_clipped' and (local_bad or local_spike):
+                    record_gradient_anomaly(model, args.output_dir, rank, step, grad_norm,
+                                            local_loss, used_lr, 'fp32' if fp32_step else 'model_dtype',
+                                            action)
                 break
             gdn_guard.force_fp32 = force_fp32_gdn
             optimizer.step()
@@ -525,6 +533,7 @@ def main():
                 'train/step_seconds': step_seconds,
                 'train/tokens_per_second': tokens_per_step / step_seconds,
                 'train/grad_norm': grad_norm.item(),
+                'train/gdn_clipped_spike': int(action == 'accept_clipped'),
                 'train/gdn_fp32_retried': int(retried_fp32),
                 'train/gdn_fp32_recovery_step': int(fp32_step and not retried_fp32),
                 'system/max_memory_allocated_bytes': torch.cuda.max_memory_allocated(device),

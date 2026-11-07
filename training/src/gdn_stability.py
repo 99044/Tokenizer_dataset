@@ -8,6 +8,15 @@ from pathlib import Path
 import torch
 
 
+def gradient_recovery_action(nonfinite, spike, fp32, retry_enabled):
+    """Retry suspicious low-precision steps; finite FP32 gradients stay clipped."""
+    if (nonfinite or spike) and retry_enabled and not fp32:
+        return 'retry_fp32'
+    if nonfinite:
+        return 'abort_nonfinite'
+    return 'accept_clipped' if spike else 'accept'
+
+
 class GDNStabilityGuard:
     def __init__(self, original, output_dir, rank, force_fp32=False):
         self.original = original

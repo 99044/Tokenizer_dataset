@@ -91,7 +91,7 @@ def run_identity(args):
                  args.eval_cache_dir / 'metadata.json', args.tokenizer_dir / 'tokenizer.json')
     arrays = (args.data_dir / 'train.npy', args.data_dir / 'validation.npy',
               *packed_cache_files(args.eval_cache_dir)[1:])
-    source = ('training/run_jd.py', 'training/src/train_ddp.py',
+    source = ('training/run_jd.py', 'training/src/train_ddp.py', 'training/src/gdn_stability.py',
               'training/src/optimizer_factory.py', 'training/src/context_curriculum.py',
               'training/src/fp32_master.py', 'training/src/model_config.py',
               'training/src/compressed_attention.py', 'training/src/dual_residual.py',
