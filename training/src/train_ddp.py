@@ -63,23 +63,29 @@ def configured_steps(settings, key):
     return set(values)
 
 
-def record_gradient_anomaly(model, output_dir, rank, step, grad_norm, loss, lr, precision,
-                            action=None):
+def preclip_gradient_absmax(model):
+    """Keep scalar gradient maxima before clipping changes the gradients."""
+    return [
+        (name, torch.linalg.vector_norm(parameter.grad.detach(), ord=float('inf')))
+        for name, parameter in model.named_parameters()
+        if parameter.grad is not None
+    ]
+
+
+def record_gradient_anomaly(preclip_absmax, output_dir, rank, step, grad_norm, loss, lr,
+                            precision, action=None):
     """Persist a large spike or a nonfinite gradient with parameter names."""
     def safe_scalar(value):
         number = float(value)
         return number if math.isfinite(number) else str(number)
 
     details = []
-    for name, parameter in model.named_parameters():
-        gradient = parameter.grad
-        if gradient is None:
-            continue
-        finite = bool(torch.isfinite(gradient).all().item())
-        absmax = float(gradient.detach().float().abs().max().item()) if finite else None
-        details.append({'name': name, 'finite': finite, 'postclip_absmax': absmax})
+    for name, maximum in preclip_absmax:
+        finite = bool(torch.isfinite(maximum).item())
+        absmax = float(maximum.item()) if finite else None
+        details.append({'name': name, 'finite': finite, 'preclip_absmax': absmax})
     largest = sorted((item for item in details if item['finite']),
-                     key=lambda item: item['postclip_absmax'], reverse=True)[:12]
+                     key=lambda item: item['preclip_absmax'], reverse=True)[:12]
     event = {
         'event': 'gradient_anomaly', 'rank': rank, 'step': step,
         'gdn_recurrence_precision': precision,
@@ -87,7 +93,7 @@ def record_gradient_anomaly(model, output_dir, rank, step, grad_norm, loss, lr, 
         'preclip_grad_norm': safe_scalar(grad_norm.item()),
         'local_loss': safe_scalar(loss.item()), 'learning_rate': lr,
         'nonfinite': [item['name'] for item in details if not item['finite']],
-        'largest_postclip_gradients': largest,
+        'largest_preclip_gradients': largest,
     }
     path = output_dir / f'gradient-anomalies-rank-{rank}.jsonl'
     with path.open('a') as stream:
@@ -487,6 +493,7 @@ def main():
                         (loss / grad_accum_steps).backward()
                         local_loss += loss.detach() / grad_accum_steps
                     del inputs, labels, logits, loss
+                preclip_absmax = preclip_gradient_absmax(model)
                 grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 local_bad = not bool(torch.isfinite(grad_norm).item()) or not bool(torch.isfinite(local_loss).item())
                 local_spike = retry_threshold is not None and grad_norm.item() > retry_threshold
@@ -499,7 +506,7 @@ def main():
                 )
                 if action == 'retry_fp32':
                     if local_bad or local_spike:
-                        record_gradient_anomaly(model, args.output_dir, rank, step, grad_norm,
+                        record_gradient_anomaly(preclip_absmax, args.output_dir, rank, step, grad_norm,
                                                 local_loss, used_lr, 'model_dtype', action)
                     # No optimizer update has occurred. Drop every bad gradient and
                     # recompute the entire step with the GDN recurrence in IEEE FP32.
@@ -508,13 +515,13 @@ def main():
                     fp32_recovery_until = step + recovery_steps - 1
                     continue
                 if action == 'abort_nonfinite':
-                    record_gradient_anomaly(model, args.output_dir, rank, step, grad_norm,
+                    record_gradient_anomaly(preclip_absmax, args.output_dir, rank, step, grad_norm,
                                             local_loss, used_lr, 'fp32' if fp32_step else 'model_dtype',
                                             action)
                     raise RuntimeError('FP32 GDN 重算后仍有非有限 loss 或梯度；详见 gradient-anomalies-rank-*.jsonl'
                                        if fp32_step else '梯度包含非有限值；详见 gradient-anomalies-rank-*.jsonl')
                 if action == 'accept_clipped' and (local_bad or local_spike):
-                    record_gradient_anomaly(model, args.output_dir, rank, step, grad_norm,
+                    record_gradient_anomaly(preclip_absmax, args.output_dir, rank, step, grad_norm,
                                             local_loss, used_lr, 'fp32' if fp32_step else 'model_dtype',
                                             action)
                 break

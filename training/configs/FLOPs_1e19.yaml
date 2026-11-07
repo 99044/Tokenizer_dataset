@@ -83,7 +83,6 @@ optimizer:
   expert_wise: true
   nesterov: false
   use_triton: false
-  compressed_branch: adamw
 scheduler:
   name: linear_cooldown
   warmup_steps: 333
