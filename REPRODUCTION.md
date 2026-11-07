@@ -27,6 +27,19 @@ bash run_submission_all.sh \
 
 每档输出保存在 `--output-dir/<档位>/`，其中 `hf-model/` 是导出的 HF 模型，`result.json` 是评测结果。`--resume` 对已有档位目录启用续跑，对未建立的目录正常开始；已完成档位会核对并复用结果。任一档位失败时停止队列，修复后重新执行同一命令即可。追加 `--dry-run` 可预览四档配置及命令。只运行 3e17 档时可用 `run_submission_20261107.sh`，其 `--output-dir` 直接指定该档目录。
 
+若 3e17 已完成，使用 `run_submission_from_1e18.sh` 从 1e18 开始，依次运行 `1e18 → 3e18 → 1e19 → 1e19_1`：
+
+```bash
+bash run_submission_from_1e18.sh \
+  --gpus 0,1,2,3,4,5,6,7 \
+  --data-dir /mnt/token_cache_24k_v1_full_20261101 \
+  --eval-cache-dir /mnt/1103_data/tok_bpe24k_v1_dolma3_mix_100M_a_npy \
+  --tokenizer-dir /mnt/tok_bpe24k_v1/tokenizer \
+  --output-dir /mnt/experiments/submission_20261107_from_1e18
+```
+
+输出根目录请使用新路径；中途需重新启动队列时追加 `--resume`。每档在训练、HF 导出和评测均成功后才会进入下一档。
+
 实际步数和 token 以 YAML 的 `training` 与 `budget` 字段为准。四档按 8 卡 DDP 配置，梯度累积分别为 4、4、8、8。8192 上下文时每卡 micro batch 为 1。模型使用 BF16 计算，前三档使用 FP32 主权重、主干 SOAP、压缩分支 AdamW；1e19 档主干 Muon、压缩分支 AdamW。峰值学习率均为 0.003。前三档按累计 FLOPs 约 5% warmup、约 70% 后线性 cooldown 至 3e-5；1e19 档按步数 4% warmup、最后 30% 线性 cooldown 至 3e-5。初始化时主干指定投影和 embedding 权重乘以 0.8，压缩分支的输出另乘对应 YAML 中的系数。每档训练进度约每 10% 保存一次，自动只保留最近两个完整 checkpoint。中断后用相同 YAML、数据和 GPU 数量传 `--resume` 继续。
 
 前三档的第 9 至 12 层使用持续双流残差，初始交叉混合比例为 0.25，每行总增益为 2，末层初始合并权重各为 0.5。第 8、12 层 Attention 将当前 V 与第 4 层 V 按各 0.5 混合，梯度回传至第 4 层。每档新增 18 个 FP32 混合参数，纳入 FP32 主权重和优化器。训练、原生评测及 HF 导出均加载这两项结构。更改模型结构或更新计划后需从头训练，后续仅使用同一配置的 checkpoint 续训。
