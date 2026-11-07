@@ -39,6 +39,7 @@ def make_config(tier):
     model.pop('value_residual', None)
     settings['training'].pop('length_curriculum', None)
     settings['training'].pop('fp32_master_weights', None)
+    settings['training'].pop('gdn_recurrent_fp32', None)
     model.update(
         num_layers=layers, hidden_size=hidden, intermediate_size=intermediate,
         num_attention_heads=heads, num_key_value_heads=heads,
@@ -99,6 +100,7 @@ def make_config(tier):
     if label in {'1e18', '3e18', '1e19'}:
         settings['training']['gdn_fp32_retry_grad_norm'] = 100.0
         settings['training']['gdn_fp32_recovery_steps'] = 16
+        settings['training']['gdn_recurrent_fp32'] = True
     if optimizer_name == 'muon':
         optimizer = dict(
             name='muon', learning_rate=lr, scalar_learning_rate=0.000265,
@@ -139,6 +141,10 @@ def make_config(tier):
     if label == '3e17':
         model['dual_residual'] = dict(enabled=True, start_layer=8, cross_mix_init=0.25)
         model['value_residual'] = dict(enabled=True, first_layer_weight=0.5)
+        settings['scaling']['expected_total_parameters'] += 18
+        settings['scaling']['additional_residual_parameters'] = 18
+    elif label in {'1e18', '3e18'}:
+        model['dual_residual'] = dict(enabled=True, start_layer=8, cross_mix_init=0.25)
         settings['scaling']['expected_total_parameters'] += 18
         settings['scaling']['additional_residual_parameters'] = 18
     if label in {'3e17', '1e18', '3e18'}:

@@ -98,16 +98,17 @@ def _build_curriculum(settings, reference):
             "c(L)=c(8192)-attention_layers*6*hidden*(8192-L)"
             "-branch_cost(8192)+branch_cost(L); branch_cost uses floor(L/compression_block)"
         )
-    has_residual = tier in {"3e17", "1e19"}
-    kind = "e16_dual_length_fp32" if has_residual else "e16_length_fp32"
-    if has_residual:
+    has_dual = model.get("dual_residual") is not None
+    has_value = model.get("value_residual") is not None
+    kind = "e16_dual_length_fp32" if has_dual else "e16_length_fp32"
+    if has_dual:
         start_layer = 12 if tier == "1e19" else 8
         expected_layers = 16 if tier == "1e19" else 12
         expected_attention = list(range(3, expected_layers, 4))
         if model.get("dual_residual") != dict(enabled=True, start_layer=start_layer, cross_mix_init=0.25):
             raise ValueError("E16 requires the four-tail-block dual-residual configuration")
-        if model.get("value_residual") != dict(enabled=True, first_layer_weight=0.5):
-            raise ValueError("E16 requires value residual with first_layer_weight=0.5")
+        if has_value and model["value_residual"] != dict(enabled=True, first_layer_weight=0.5):
+            raise ValueError("Invalid value residual configuration")
         if (
             layers != expected_layers or attention_indices != expected_attention
             or model["num_key_value_heads"] * model["attention_head_dim"] != hidden
@@ -115,26 +116,27 @@ def _build_curriculum(settings, reference):
         ):
             raise ValueError("E16 residual accounting requires its declared model dimensions")
         dual_flops = (64 * (layers - start_layer) + 20) * hidden
-        value_flops = 9 * (attention_layers - 1) * model["num_key_value_heads"] * model["attention_head_dim"]
+        value_flops = (9 * (attention_layers - 1) * model["num_key_value_heads"]
+                       * model["attention_head_dim"]) if has_value else 0
         cost += dual_flops + value_flops
         accounting.update(
             kind="e16_baseline_matched_with_residual_upper_bounds",
             length_formula=accounting["length_formula"] + "+residual_extra_flops_per_token",
             additional_residual_parameters=18,
             dual_residual_extra_training_flops_per_token_upper_bound=dual_flops,
-            value_residual_extra_training_flops_per_token_upper_bound=value_flops,
+            **({"value_residual_extra_training_flops_per_token_upper_bound": value_flops} if has_value else {}),
             residual_extra_flops_per_token=dual_flops + value_flops,
             dual_formula=f"(64 * {layers - start_layer} + 20) * {hidden} = {dual_flops}",
-            value_formula=f"9 * {attention_layers - 1} * {hidden} = {value_flops}",
+            **({"value_formula": f"9 * {attention_layers - 1} * {hidden} = {value_flops}"} if has_value else {}),
             full_length_flops_per_token_numerator=cost.numerator,
             full_length_flops_per_token_denominator=cost.denominator,
-            residual_scope=f"Four dual-stream tail blocks and {'two' if attention_layers == 3 else 'three'} value residual connections, "
+            residual_scope=f"Four dual-stream tail blocks{(' and ' + ('two' if attention_layers == 3 else 'three') + ' value residual connections') if has_value else ''}, "
             "8192 positions per rank microbatch at lengths 2048/4096/8192, no activation "
             "recomputation. Conservative forward/backward arithmetic allowances inherit "
             "the E16 reference and can double-count shared baseline additions.",
         )
-    elif any(key in model for key in ("dual_residual", "value_residual")) or "additional_residual_parameters" in settings["scaling"]:
-        raise ValueError("This curriculum tier does not include residual branches")
+    elif has_value or "additional_residual_parameters" in settings["scaling"]:
+        raise ValueError("Residual accounting requires the dual-residual branch")
     warmup = Fraction(_integer(reference["warmup_steps"], "baseline warmup_steps", 0), baseline_steps)
     cooldown = Fraction(_integer(reference["cooldown_steps"], "baseline cooldown_steps", 0), baseline_steps)
     if not 0 <= warmup < 1 or not 0 < cooldown < 1 or warmup + cooldown > 1:

@@ -77,6 +77,7 @@ training:
   gradient_checkpointing: false
   gdn_fp32_retry_grad_norm: 100.0
   gdn_fp32_recovery_steps: 16
+  gdn_recurrent_fp32: true
   length_curriculum:
     kind: e16_dual_length_fp32
     version: 1

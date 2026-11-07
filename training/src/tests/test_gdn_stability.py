@@ -16,7 +16,7 @@ class GDNStabilityTests(unittest.TestCase):
         optimizer = torch.optim.SGD([parameter], lr=0.003)
         parameter.grad = torch.tensor([2499.187])
         norm = torch.nn.utils.clip_grad_norm_([parameter], 1.0)
-        self.assertEqual(gradient_recovery_action(False, True, False, True), 'retry_fp32')
+        self.assertEqual(gradient_recovery_action(False, True, False, True), 'accept_clipped')
         self.assertEqual(gradient_recovery_action(False, norm.item() > 100, True, True),
                          'accept_clipped')
         optimizer.step()
@@ -27,6 +27,9 @@ class GDNStabilityTests(unittest.TestCase):
         self.assertEqual(gradient_recovery_action(True, True, True, True), 'abort_nonfinite')
         self.assertEqual(gradient_recovery_action(True, False, False, False), 'abort_nonfinite')
         self.assertEqual(gradient_recovery_action(False, False, False, True), 'accept')
+
+    def test_finite_fp32_spike_is_never_treated_as_nonfinite(self):
+        self.assertEqual(gradient_recovery_action(False, True, True, True), 'accept_clipped')
 
     def test_fp32_recurrence_preserves_bf16_interface_and_gradient(self):
         dtypes = []

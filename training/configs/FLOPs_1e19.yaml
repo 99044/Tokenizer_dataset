@@ -69,6 +69,7 @@ training:
   gradient_checkpointing: false
   gdn_fp32_retry_grad_norm: 100.0
   gdn_fp32_recovery_steps: 16
+  gdn_recurrent_fp32: true
 optimizer:
   name: muon
   learning_rate: 0.003

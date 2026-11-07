@@ -61,9 +61,11 @@ def main():
                 assert model['value_residual'] == dict(enabled=True, first_layer_weight=0.5)
                 assert actual['scaling']['additional_residual_parameters'] == 18
             else:
-                assert 'dual_residual' not in model and 'value_residual' not in model
-                assert 'additional_residual_parameters' not in actual['scaling']
-                assert training['length_curriculum']['accounting']['kind'] == 'baseline_matched_attention_gemm_length_proxy'
+                assert model['dual_residual'] == dict(enabled=True, start_layer=8, cross_mix_init=0.25)
+                assert 'value_residual' not in model
+                assert actual['scaling']['additional_residual_parameters'] == 18
+                assert training['length_curriculum']['accounting']['kind'] == 'e16_baseline_matched_with_residual_upper_bounds'
+                assert 'value_residual_extra_training_flops_per_token_upper_bound' not in training['length_curriculum']['accounting']
         if label == '3e17':
             assert reference['max_steps'] == 5045
             assert reference['warmup_steps'] == 253
@@ -91,6 +93,8 @@ def main():
                 actual, world_size=DATA_PARALLEL_SIZE, micro_batch_size=1,
                 grad_accum_steps=accumulation, max_steps=training['max_steps'],
             )
+        if label in {'1e18', '3e18', '1e19'}:
+            assert training['gdn_recurrent_fp32'] is True
         assert actual['initialization']['projection_scale'] == 0.8
         assert actual['scaling']['expected_branch_parameters'] > 0
         assert budget_record['planned_training_flops'] <= budget * 99 // 100
@@ -107,6 +111,7 @@ def main():
     assert variant['optimizer'] == dict(baseline['optimizer'], compressed_branch='adamw')
     assert variant['training']['dtype'] == baseline['training']['dtype'] == 'bfloat16'
     assert variant['training']['fp32_master_weights'] is True
+    assert variant['training']['gdn_recurrent_fp32'] is True
     assert variant['scaling']['expected_total_parameters'] == baseline['scaling']['expected_total_parameters'] + 18
     assert variant['budget']['planned_training_flops'] <= variant['budget']['total_training_flops'] * 99 // 100
     validate_curriculum(

@@ -9,8 +9,8 @@ import torch
 
 
 def gradient_recovery_action(nonfinite, spike, fp32, retry_enabled):
-    """Retry suspicious low-precision steps; finite FP32 gradients stay clipped."""
-    if (nonfinite or spike) and retry_enabled and not fp32:
+    """Retry nonfinite low-precision steps; keep finite clipped gradients."""
+    if nonfinite and retry_enabled and not fp32:
         return 'retry_fp32'
     if nonfinite:
         return 'abort_nonfinite'
