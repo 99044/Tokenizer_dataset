@@ -71,7 +71,9 @@ def make_config(tier):
     max_steps = (budget * 99 // 100) // flops_per_update
     if max_steps < 10:
         raise ValueError('budget is too small for checkpoint schedule')
-    checkpoints = sorted({round(max_steps * part / 10) for part in range(1, 10)})
+    checkpoint_parts = 20 if label == '1e19' else 10
+    checkpoints = sorted({round(max_steps * part / checkpoint_parts)
+                          for part in range(1, checkpoint_parts)})
     settings['run'] = dict(name=f'wide_compressed_{hidden}_{label}_{optimizer_name}', seed=42)
     settings['scaling'] = dict(
         family='wide_compressed_24k', nominal_size=NOMINAL_SIZES[label],
@@ -94,6 +96,9 @@ def make_config(tier):
         gradient_accumulation_steps=accumulation,
     )
     settings['training'].pop('fp32_master_weights', None)
+    if label in {'1e18', '3e18', '1e19'}:
+        settings['training']['gdn_fp32_retry_grad_norm'] = 100.0
+        settings['training']['gdn_fp32_recovery_steps'] = 16
     if optimizer_name == 'muon':
         optimizer = dict(
             name='muon', learning_rate=lr, scalar_learning_rate=0.000265,
@@ -107,7 +112,8 @@ def make_config(tier):
             eps=1e-8, weight_decay=0.1,
             precondition_frequency=10, max_precond_dim=1024,
         )
-    optimizer['compressed_branch'] = 'adamw'
+    if label != '1e19':
+        optimizer['compressed_branch'] = 'adamw'
     settings['optimizer'] = optimizer
     settings['initialization'] = dict(projection_scale=0.8, repair_gdn_a_log=True)
     if label in {'3e17', '1e18', '3e18'}:
@@ -130,7 +136,7 @@ def make_config(tier):
     settings['output'] = dict(directory=f'runs/submission_20261103/{label}')
     settings['submission'] = dict(target_date='2026-11-03', budget_tier=label,
                                   data_parallel_size=DATA_PARALLEL_SIZE)
-    if label in {'3e17', '1e18', '3e18'}:
+    if label == '3e17':
         model['dual_residual'] = dict(enabled=True, start_layer=8, cross_mix_init=0.25)
         model['value_residual'] = dict(enabled=True, first_layer_weight=0.5)
         settings['scaling']['expected_total_parameters'] += 18
@@ -144,6 +150,9 @@ def make_1e19_fp32_residual_curriculum():
     settings = make_config(TIERS[-1])
     settings['run']['name'] += '_fp32_residual_curriculum'
     settings['output']['directory'] += '_1'
+    settings['optimizer']['compressed_branch'] = 'adamw'
+    settings['logging']['checkpoint_steps'] = sorted({round(settings['training']['max_steps'] * part / 10)
+                                                       for part in range(1, 10)})
     settings['model']['dual_residual'] = dict(enabled=True, start_layer=12, cross_mix_init=0.25)
     settings['model']['value_residual'] = dict(enabled=True, first_layer_weight=0.5)
     settings['scaling']['additional_residual_parameters'] = 18

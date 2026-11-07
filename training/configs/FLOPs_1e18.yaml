@@ -4,16 +4,15 @@ run:
 scaling:
   family: wide_compressed_24k
   nominal_size: 200m
-  expected_total_parameters: 200197036
+  expected_total_parameters: 200197018
   expected_branch_parameters: 110100480
   parameter_count_vocab_size: 24576
   tokens_per_update: 262144
-  flops_accounting: e16_baseline_matched_with_residual_upper_bounds
-  additional_residual_parameters: 18
+  flops_accounting: baseline_matched_attention_gemm_length_proxy
 budget:
   total_training_flops: 1000000000000000000
-  planned_training_flops: 989871178409137408
-  planned_training_tokens: 1586495488
+  planned_training_flops: 989905431196703616
+  planned_training_tokens: 1587019776
   flops_per_token_numerator: 5490916782362
   flops_per_token_denominator: 8192
   flops_per_token_basis: 8192-token reference; use curriculum stage costs at runtime
@@ -62,23 +61,16 @@ model:
     block_size: 128
     intermediate_size: 2048
     scale: 0.001
-  dual_residual:
-    enabled: true
-    start_layer: 8
-    cross_mix_init: 0.25
-  value_residual:
-    enabled: true
-    first_layer_weight: 0.5
 training:
   dtype: bfloat16
-  max_steps: 6052
+  max_steps: 6054
   micro_batch_size: 1
   gradient_accumulation_steps: 4
   gradient_checkpointing: false
   gdn_fp32_retry_grad_norm: 100.0
   gdn_fp32_recovery_steps: 16
   length_curriculum:
-    kind: e16_dual_length_fp32
+    kind: e16_length_fp32
     version: 1
     world_size: 8
     tokens_per_update: 262144
@@ -101,11 +93,11 @@ training:
       tokens_per_update: 262144
       requested_flops_fraction: 0.5
       first_step: 1
-      last_step: 3150
-      steps: 3150
-      flops_per_update: 157107766567744
-      flops: 494889464688393600
-      cumulative_flops: 494889464688393600
+      last_step: 3151
+      steps: 3151
+      flops_per_update: 157058441552704
+      flops: 494891149332570304
+      cumulative_flops: 494891149332570304
     - stage: medium
       stage_index: 1
       length: 4096
@@ -113,12 +105,12 @@ training:
       grad_accum_steps: 4
       tokens_per_update: 262144
       requested_flops_fraction: 0.2
-      first_step: 3151
-      last_step: 4362
+      first_step: 3152
+      last_step: 4363
       steps: 1212
-      flops_per_update: 163324731728704
-      flops: 197949574855189248
-      cumulative_flops: 692839039543582848
+      flops_per_update: 163275406713664
+      flops: 197889792936960768
+      cumulative_flops: 692780942269531072
     - stage: full
       stage_index: 2
       length: 8192
@@ -126,20 +118,20 @@ training:
       grad_accum_steps: 4
       tokens_per_update: 262144
       requested_flops_fraction: 0.3
-      first_step: 4363
-      last_step: 6052
-      steps: 1690
-      flops_per_update: 175758662050624
-      flops: 297032138865554560
-      cumulative_flops: 989871178409137408
-    max_steps: 6052
-    planned_training_flops: 989871178409137408
-    planned_training_tokens: 1586495488
-    unused_reference_flops: 75226449342848
+      first_step: 4364
+      last_step: 6054
+      steps: 1691
+      flops_per_update: 175709337035584
+      flops: 297124488927172544
+      cumulative_flops: 989905431196703616
+    max_steps: 6054
+    planned_training_flops: 989905431196703616
+    planned_training_tokens: 1587019776
+    unused_reference_flops: 40973661776640
     accounting:
-      kind: e16_baseline_matched_with_residual_upper_bounds
+      kind: baseline_matched_attention_gemm_length_proxy
       official_ledger: false
-      length_formula: c(L)=c(8192)-attention_layers*6*hidden*(8192-L)-3*4*hidden*(8192//compression_block-L//compression_block)+residual_extra_flops_per_token
+      length_formula: c(L)=c(8192)-attention_layers*6*hidden*(8192-L)-3*4*hidden*(8192//compression_block-L//compression_block)
       fraction_basis: FLOPs budget; final stage receives complete updates from the
         remainder
       limitations: Analytical estimate inherited from the baseline. Length-dependent
@@ -147,18 +139,6 @@ training:
         its 3x-forward upper estimate. Optimizer updates, FP32 master copies, communication,
         activation recomputation and training-loss softmax/CE are outside this prediction-graph
         ledger. Runtime numerical fallback costs require separate reporting.
-      additional_residual_parameters: 18
-      dual_residual_extra_training_flops_per_token_upper_bound: 176640
-      value_residual_extra_training_flops_per_token_upper_bound: 11520
-      residual_extra_flops_per_token: 188160
-      dual_formula: (64 * 4 + 20) * 640 = 176640
-      value_formula: 9 * 2 * 640 = 11520
-      full_length_flops_per_token_numerator: 2746229094541
-      full_length_flops_per_token_denominator: 4096
-      residual_scope: Four dual-stream tail blocks and two value residual connections,
-        8192 positions per rank microbatch at lengths 2048/4096/8192, no activation
-        recomputation. Conservative forward/backward arithmetic allowances inherit
-        the E16 reference and can double-count shared baseline additions.
   fp32_master_weights: true
 optimizer:
   name: soap
@@ -189,20 +169,20 @@ logging:
   entity: echo-lab
   project: scicomp26
   log_every_steps: 5
-  eval_every_steps: 6052
+  eval_every_steps: 6054
   eval_batches: 8
   final_eval_batches: 64
-  checkpoint_every_steps: 6052
+  checkpoint_every_steps: 6054
   checkpoint_steps:
   - 605
-  - 1210
+  - 1211
   - 1816
-  - 2421
-  - 3026
-  - 3631
-  - 4236
-  - 4842
-  - 5447
+  - 2422
+  - 3027
+  - 3632
+  - 4238
+  - 4843
+  - 5449
   checkpoint_keep_last: 2
 output:
   directory: runs/submission_20261103/1e18

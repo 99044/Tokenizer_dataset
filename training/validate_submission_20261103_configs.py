@@ -42,7 +42,10 @@ def main():
             DATA_PARALLEL_SIZE * accumulation * model['context_length']
         )
         assert actual['optimizer']['name'] == optimizer
-        assert actual['optimizer']['compressed_branch'] == 'adamw'
+        if label != '1e19':
+            assert actual['optimizer']['compressed_branch'] == 'adamw'
+        else:
+            assert 'compressed_branch' not in actual['optimizer']
         assert actual['optimizer']['learning_rate'] == 0.003
         if optimizer == 'muon':
             assert actual['optimizer']['scalar_learning_rate'] == 0.000265
@@ -53,9 +56,14 @@ def main():
             assert actual['scheduler']['final_lr_ratio'] == reference['final_lr_ratio'] == 0.01
             assert 0.05 <= actual['scheduler']['warmup_fraction'] < 0.051
             assert 0.299 <= actual['scheduler']['cooldown_fraction'] <= 0.301
-            assert model['dual_residual'] == dict(enabled=True, start_layer=8, cross_mix_init=0.25)
-            assert model['value_residual'] == dict(enabled=True, first_layer_weight=0.5)
-            assert actual['scaling']['additional_residual_parameters'] == 18
+            if label == '3e17':
+                assert model['dual_residual'] == dict(enabled=True, start_layer=8, cross_mix_init=0.25)
+                assert model['value_residual'] == dict(enabled=True, first_layer_weight=0.5)
+                assert actual['scaling']['additional_residual_parameters'] == 18
+            else:
+                assert 'dual_residual' not in model and 'value_residual' not in model
+                assert 'additional_residual_parameters' not in actual['scaling']
+                assert training['length_curriculum']['accounting']['kind'] == 'baseline_matched_attention_gemm_length_proxy'
         if label == '3e17':
             assert reference['max_steps'] == 5045
             assert reference['warmup_steps'] == 253
@@ -96,7 +104,7 @@ def main():
     assert variant['model']['dual_residual'] == dict(enabled=True, start_layer=12, cross_mix_init=0.25)
     assert variant['model']['value_residual'] == dict(enabled=True, first_layer_weight=0.5)
     assert variant['model']['compressed_attention'] == baseline['model']['compressed_attention']
-    assert variant['optimizer'] == baseline['optimizer']
+    assert variant['optimizer'] == dict(baseline['optimizer'], compressed_branch='adamw')
     assert variant['training']['dtype'] == baseline['training']['dtype'] == 'bfloat16'
     assert variant['training']['fp32_master_weights'] is True
     assert variant['scaling']['expected_total_parameters'] == baseline['scaling']['expected_total_parameters'] + 18

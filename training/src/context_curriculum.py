@@ -98,8 +98,9 @@ def _build_curriculum(settings, reference):
             "c(L)=c(8192)-attention_layers*6*hidden*(8192-L)"
             "-branch_cost(8192)+branch_cost(L); branch_cost uses floor(L/compression_block)"
         )
-    kind = "e16_dual_length_fp32"
-    if tier in {"3e17", "1e18", "3e18", "1e19"}:
+    has_residual = tier in {"3e17", "1e19"}
+    kind = "e16_dual_length_fp32" if has_residual else "e16_length_fp32"
+    if has_residual:
         start_layer = 12 if tier == "1e19" else 8
         expected_layers = 16 if tier == "1e19" else 12
         expected_attention = list(range(3, expected_layers, 4))
@@ -132,6 +133,8 @@ def _build_curriculum(settings, reference):
             "recomputation. Conservative forward/backward arithmetic allowances inherit "
             "the E16 reference and can double-count shared baseline additions.",
         )
+    elif any(key in model for key in ("dual_residual", "value_residual")) or "additional_residual_parameters" in settings["scaling"]:
+        raise ValueError("This curriculum tier does not include residual branches")
     warmup = Fraction(_integer(reference["warmup_steps"], "baseline warmup_steps", 0), baseline_steps)
     cooldown = Fraction(_integer(reference["cooldown_steps"], "baseline cooldown_steps", 0), baseline_steps)
     if not 0 <= warmup < 1 or not 0 < cooldown < 1 or warmup + cooldown > 1:
