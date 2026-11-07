@@ -104,15 +104,25 @@ logging:
   final_eval_batches: 64
   checkpoint_every_steps: 8324
   checkpoint_steps:
+  - 416
   - 832
+  - 1249
   - 1665
+  - 2081
   - 2497
+  - 2913
   - 3330
+  - 3746
   - 4162
+  - 4578
   - 4994
+  - 5411
   - 5827
+  - 6243
   - 6659
+  - 7075
   - 7492
+  - 7908
   checkpoint_keep_last: 2
 output:
   directory: runs/submission_20261103/1e19
