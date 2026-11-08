@@ -30,9 +30,12 @@ def hybrid_fixture(vocab_size, heads=1):
     settings = yaml.safe_load(config.read_text())
     model = settings['model']
     hidden, intermediate, key, value = 128 * heads, 512 * heads, 96 * heads, 192 * heads
-    model.update(num_layers=4, hidden_size=hidden, intermediate_size=intermediate,
+    model.update(num_layers=8, hidden_size=hidden, intermediate_size=intermediate,
                  num_attention_heads=heads, num_key_value_heads=heads,
                  gdn_num_heads=heads, gdn_num_value_heads=heads, vocab_size=vocab_size)
+    model['compressed_attention'].update(layer_index=7, block_size=8,
+                                         intermediate_size=intermediate)
+    model['dual_residual']['start_layer'] = 6
     generator = torch.Generator().manual_seed(19)
     state = {}
 
@@ -46,18 +49,32 @@ def hybrid_fixture(vocab_size, heads=1):
     weight('embeddings.weight', (vocab_size, hidden))
     state['lm_head.w_out.weight'] = state['embeddings.weight']
     weight('lm_head.norm.weight', (hidden,), norm=True)
-    for index in range(4):
+    for index in range(8):
         prefix = f'blocks.{index}.'
+        if index >= 6:
+            state[prefix + 'dual_residual_mixing.post_logits'] = torch.tensor(
+                [[0.75, 0.25], [0.25, 0.75]], dtype=torch.float32).log()
+            if index == 7:
+                state[prefix + 'dual_residual_mixing.merge_logits'] = torch.zeros(2)
         for suffix in ('attention_norm.weight', 'feed_forward_norm.weight'):
             weight(prefix + suffix, (hidden,), norm=True)
         for name, shape in [('w1', (intermediate, hidden)), ('w2', (hidden, intermediate)),
                             ('w3', (intermediate, hidden))]:
             weight(prefix + f'feed_forward.{name}.weight', shape)
-        if index == 3:
+        if index % 4 == 3:
+            base = 'attention.base.' if index == 7 else 'attention.'
             for name in ('w_q', 'w_k', 'w_v', 'w_out'):
-                weight(prefix + f'attention.{name}.weight', (hidden, hidden))
+                weight(prefix + f'{base}{name}.weight', (hidden, hidden))
             for name in ('q_norm', 'k_norm'):
-                weight(prefix + f'attention.{name}.weight', (hidden,), norm=True)
+                weight(prefix + f'{base}{name}.weight', (hidden,), norm=True)
+            if index == 7:
+                for name in ('k_compress', 'v_compress'):
+                    weight(prefix + f'attention.compressed.{name}.weight',
+                           (hidden, model['compressed_attention']['block_size'] * hidden))
+                for name in ('k_up', 'v_up'):
+                    weight(prefix + f'attention.compressed.{name}.weight', (intermediate, hidden))
+                for name in ('k_down', 'v_down'):
+                    weight(prefix + f'attention.compressed.{name}.weight', (hidden, intermediate))
         else:
             for name, shape in [('w_q', (key, hidden)), ('w_k', (key, hidden)),
                                 ('w_v', (value, hidden)), ('w_a', (heads, hidden)), ('w_b', (heads, hidden)),
@@ -152,7 +169,7 @@ class ExportHFTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'shapes differ'):
             logits_metrics(logits, torch.zeros(1, 2, 4), 1e-4, 1e-4)
 
-    def test_four_submission_hf_shapes_match_native_parameter_counts(self):
+    def test_submission_hf_shapes_match_native_parameter_counts(self):
         import yaml
         from transformers import AutoModelForCausalLM
 
@@ -160,7 +177,7 @@ class ExportHFTests(unittest.TestCase):
         for path in sorted(configs.glob('FLOPs_*.yaml')):
             with self.subTest(config=path.name), torch.device('meta'):
                 settings = yaml.safe_load(path.read_text())
-                config = hybrid_hf_config(settings, 32768)
+                config = hybrid_hf_config(settings, settings['model']['vocab_size'])
                 hf = AutoModelForCausalLM.from_config(config, attn_implementation='sdpa')
                 self.assertEqual(sum(p.numel() for p in hf.parameters()),
                                  settings['scaling']['expected_total_parameters'])
