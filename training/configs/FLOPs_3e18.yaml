@@ -1,5 +1,5 @@
 run:
-  name: submission_1108_3e18_soap
+  name: submission_1108_3e18
   seed: 42
 scaling:
   family: wide_compressed_24k
@@ -111,7 +111,6 @@ logging:
 output:
   directory: runs/submission_1108/3e18
 submission:
-  target_date: '2026-11-03'
   budget_tier: 3e18
   data_parallel_size: 8
 initialization:

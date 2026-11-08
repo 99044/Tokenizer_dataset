@@ -1,5 +1,5 @@
 run:
-  name: wide_330m_block388_plateau_1e19_8gpu_muon
+  name: submission_1108_1e19
   seed: 42
 scaling:
   family: wide_330m_block388_32k
@@ -120,6 +120,5 @@ initialization:
   projection_scale: 0.8
   repair_gdn_a_log: true
 submission:
-  target_date: '2026-11-08'
   budget_tier: 1e19
   data_parallel_size: 8

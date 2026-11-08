@@ -27,6 +27,7 @@ def main():
         path = ROOT / 'training/configs' / f'FLOPs_{tier}.yaml'
         settings = yaml.safe_load(path.read_text())
         model, training = settings['model'], settings['training']
+        assert settings['run']['name'] == f'submission_1108_{tier}'
         tokens_per_update = world * model['context_length'] * training['micro_batch_size'] * accum
         assert model['vocab_size'] == settings['scaling']['parameter_count_vocab_size'] == vocab
         assert settings['submission']['data_parallel_size'] == world

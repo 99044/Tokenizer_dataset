@@ -1,5 +1,5 @@
 run:
-  name: wide_compressed_256_3e17_soap
+  name: submission_1108_3e17
   seed: 42
 scaling:
   family: wide_compressed_24k
@@ -16,7 +16,6 @@ budget:
   planned_training_tokens: 1442316288
   flops_per_token_numerator: 1839595666532
   flops_per_token_denominator: 8192
-  flops_per_token_basis: 8192-token reference; use curriculum stage costs at runtime
 model:
   type: olmo_hybrid_scaling
   num_layers: 12
@@ -203,9 +202,8 @@ logging:
   - 4952
   checkpoint_keep_last: 2
 output:
-  directory: runs/submission_20261103/3e17
+  directory: runs/submission_1108/3e17
 submission:
-  target_date: '2026-11-03'
   budget_tier: 3e17
   data_parallel_size: 8
 initialization:
