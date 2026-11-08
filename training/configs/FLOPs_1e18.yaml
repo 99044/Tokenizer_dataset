@@ -7,7 +7,7 @@ scaling:
   expected_total_parameters: 200197018
   expected_branch_parameters: 110100480
   parameter_count_vocab_size: 24576
-  tokens_per_update: 98304
+  tokens_per_update: 131072
   flops_accounting: Hybrid ledger plus compressed-branch upper estimate
 budget:
   total_training_flops: 1000000000000000000
@@ -15,7 +15,7 @@ budget:
   planned_training_tokens: 1476919296
   flops_per_token_numerator: 5490916782362
   flops_per_token_denominator: 8192
-  flops_per_update: 65891001388344
+  flops_per_update: 87854668517792
 model:
   type: olmo_hybrid_scaling
   num_layers: 12
@@ -68,9 +68,9 @@ training:
     start_fraction: 0.7
     half_life_tokens: [20000000, 80000000]
   dtype: bfloat16
-  max_steps: 15024
+  max_steps: 11268
   micro_batch_size: 1
-  gradient_accumulation_steps: 3
+  gradient_accumulation_steps: 2
   gradient_checkpointing: false
 optimizer:
   name: soap
@@ -84,8 +84,8 @@ optimizer:
   max_precond_dim: 1024
 scheduler:
   name: linear_cooldown
-  warmup_steps: 40
-  cooldown_steps: 2510
+  warmup_steps: 30
+  cooldown_steps: 1883
   final_lr_ratio: 0.0
 data:
   tokenizer_path: null
@@ -98,26 +98,26 @@ logging:
   entity: echo-lab
   project: scicomp26
   log_every_steps: 5
-  eval_every_steps: 15024
+  eval_every_steps: 11268
   eval_batches: 8
   final_eval_batches: 64
-  checkpoint_every_steps: 15024
+  checkpoint_every_steps: 11268
   checkpoint_steps:
-  - 1502
-  - 3004
-  - 4508
-  - 6010
-  - 7512
+  - 1127
+  - 2254
+  - 3380
+  - 4507
+  - 5634
+  - 6761
+  - 7888
   - 9014
-  - 10516
-  - 12020
-  - 13522
+  - 10141
   checkpoint_keep_last: 2
 output:
   directory: runs/submission_1108/1e18
 submission:
   budget_tier: 1e18
-  data_parallel_size: 4
+  data_parallel_size: 8
 initialization:
   projection_scale: 0.8
   repair_gdn_a_log: true
