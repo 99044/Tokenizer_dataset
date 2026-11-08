@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check the three selected training plans and evaluation defaults."""
+"""Check the selected training plans and evaluation defaults."""
 
 from pathlib import Path
 import sys
@@ -12,6 +12,7 @@ from context_curriculum import validate_curriculum
 
 EXPECTED = {
     '3e17': (24576, 8, 4, 5502, 47756790),
+    '1e18': (24576, 4, 3, 15024, 200197018),
     '3e18': (24576, 8, 4, 16902, 200197018),
     '1e19': (32768, 8, 8, 8143, 1171647936),
 }
@@ -43,6 +44,14 @@ def main():
             validate_curriculum(settings, world, training['micro_batch_size'], accum, steps)
         print(tier, parameters, steps, tokens_per_update)
 
+    one = yaml.safe_load((ROOT / 'training/configs/FLOPs_1e18.yaml').read_text())
+    assert one['optimizer']['name'] == 'soap'
+    assert one['training']['dtype'] == 'bfloat16'
+    assert one['training']['fp32_master_weights'] is True
+    assert one['training']['ema'] == {
+        'enabled': True, 'start_fraction': 0.7,
+        'half_life_tokens': [20_000_000, 80_000_000],
+    }
     three = yaml.safe_load((ROOT / 'training/configs/FLOPs_3e18.yaml').read_text())
     assert three['optimizer']['name'] == 'soap'
     assert 'length_curriculum' not in three['training']

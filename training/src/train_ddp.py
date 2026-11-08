@@ -18,6 +18,7 @@ import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from fp32_master import FP32MasterWeights
+from weight_ema import WeightEMA, resolve_ema_config
 from gdn_stability import gradient_recovery_action, install_gdn_stability_guard
 from compressed_attention import attach_compressed_attention
 from dual_residual import attach_dual_residual
@@ -262,6 +263,13 @@ def main():
         if master_weights is not None:
             optimizer = master_weights.install(optimizer)
             optimizer_report['fp32_master_weights'] = True
+        ema_spec = resolve_ema_config(
+            settings['training'].get('ema'), args.max_steps,
+            world * args.micro_batch_size * args.grad_accum_steps * context_length,
+        )
+        ema = WeightEMA(model, ema_spec, master_weights) if ema_spec and rank == 0 else None
+        if ema_spec and args.branch_from:
+            raise ValueError('EMA supports exact --resume, not --branch-from')
 
         scheduler_settings = settings['scheduler']
         scheduler_name = scheduler_settings['name']
@@ -332,6 +340,8 @@ def main():
                 master_weights.load_state_dict(checkpoint['fp32_master'])
             scheduler.load_state_dict(checkpoint['scheduler'])
             start_step = int(checkpoint['step'])
+            if ema is not None:
+                ema.load_state_dict(checkpoint['ema'], start_step)
             resumed_rng = checkpoint['rng_by_rank'][rank]
             del checkpoint
         elif args.branch_from:
@@ -527,6 +537,8 @@ def main():
                 break
             gdn_guard.force_fp32 = force_fp32_gdn
             optimizer.step()
+            if ema is not None:
+                ema.update(step)
             scheduler.step()
             dist.all_reduce(local_loss)
             mean_loss = (local_loss / world).item()
@@ -576,6 +588,9 @@ def main():
                 metrics['validation/batches'] = eval_batches
             metrics['elapsed_seconds'] = time.perf_counter() - run_started
             if rank == 0:
+                if ema is not None:
+                    metrics['ema/updates'] = ema.updates
+                    metrics['ema/start_step'] = ema_spec['start_step']
                 print(json.dumps(metrics), flush=True)
                 with (args.output_dir / 'metrics.jsonl').open('a') as log:
                     log.write(json.dumps(metrics) + '\n')
@@ -595,6 +610,8 @@ def main():
                     )
                     if master_weights is not None:
                         checkpoint_payload['fp32_master'] = master_weights.state_dict()
+                    if ema is not None:
+                        checkpoint_payload['ema'] = ema.state_dict()
                     if stage is not None:
                         checkpoint_payload.update(
                             completed_flops=curriculum_completed_flops(settings, step),

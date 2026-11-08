@@ -94,6 +94,7 @@ def run_identity(args):
     source = ('training/run_jd.py', 'training/src/train_ddp.py', 'training/src/gdn_stability.py',
               'training/src/optimizer_factory.py', 'training/src/context_curriculum.py',
               'training/src/fp32_master.py', 'training/src/model_config.py',
+              'training/src/weight_ema.py',
               'training/src/compressed_attention.py', 'training/src/dual_residual.py',
               'training/src/value_residual.py', 'training/src/hybrid_export.py',
               'training/export_hf.py', 'evaluation/eval.py',
@@ -216,12 +217,13 @@ def train_to_completion(args, settings, environment):
         time.sleep(args.retry_delay)
 
 
-def validate_export(output, checkpoint, settings):
+def validate_export(output, checkpoint, settings, source_weights='raw'):
     record = json.loads((output / 'export_record.json').read_text())
     if (record.get('status') not in ('passed', 'passed_with_bf16_differences')
             or record.get('source_checkpoint') != str(checkpoint)
             or record.get('source_step') != settings['training']['max_steps']
-            or record.get('source_model_config') != settings['model']):
+            or record.get('source_model_config') != settings['model']
+            or record.get('source_weights', 'raw') != source_weights):
         raise ValueError('HF export validation differs from the final checkpoint')
 
 
@@ -257,8 +259,48 @@ def postprocess(args, settings, checked, environment, checkpoint):
             or result.get('batch_size_per_gpu') != args.eval_batch_size
             or result.get('fusion', {}).get('mode') != 'ffn_rmsnorm'):
         raise ValueError('HF evaluation result does not match the requested cache/settings')
-    return dict(status='passed', checkpoint=str(checkpoint), hf_model=str(hf),
-                result=str(result_path), bpb=result['bpb'], evaltime=result['evaltime'])
+    report = dict(status='passed', checkpoint=str(checkpoint), hf_model=str(hf),
+                  result=str(result_path), bpb=result['bpb'], evaltime=result['evaltime'])
+    ema_config = settings['training'].get('ema', {})
+    if ema_config.get('enabled'):
+        report['ema_results'] = {}
+        for half_life in ema_config['half_life_tokens']:
+            variant = f'ema_{half_life}'
+            ema_hf = output / f'hf-{variant}'
+            if not ema_hf.is_dir():
+                with tempfile.TemporaryDirectory(prefix='.export-', dir=output) as temporary:
+                    staging = Path(temporary) / 'hf-model'
+                    command = commands(args, settings)['export']
+                    command[command.index('--output-dir') + 1] = str(staging)
+                    command.extend(['--ema', variant])
+                    if run_stage(command, output / f'export-{variant}.log', environment):
+                        raise RuntimeError(f'{variant} HF export failed; see export-{variant}.log')
+                    validate_export(staging, checkpoint, settings, variant)
+                    staging.rename(ema_hf)
+            validate_export(ema_hf, checkpoint, settings, variant)
+            ema_result_path = output / f'result-{variant}.json'
+            if not ema_result_path.is_file():
+                command = commands(args, settings)['evaluate']
+                command[-2:] = [str(ema_hf), str(ema_result_path)]
+                if run_stage(command, output / f'eval-{variant}.log', environment):
+                    raise RuntimeError(f'{variant} HF evaluation failed; see eval-{variant}.log')
+            ema_result = json.loads(ema_result_path.read_text())
+            if (not math.isfinite(ema_result.get('bpb', math.nan))
+                    or not math.isfinite(ema_result.get('evaltime', math.nan))
+                    or ema_result.get('model_path') != str(ema_hf)
+                    or ema_result.get('distributed_world_size') != 1
+                    or ema_result.get('sequence_length') != 8192
+                    or ema_result.get('scored_tokens') != checked['eval_tokens']
+                    or ema_result.get('data_source', {}).get('total_bytes') != checked['eval_bytes']
+                    or ema_result.get('data_source', {}).get('path') != str(args.eval_cache_dir)
+                    or ema_result.get('batch_size_per_gpu') != args.eval_batch_size
+                    or ema_result.get('fusion', {}).get('mode') != 'ffn_rmsnorm'):
+                raise ValueError(f'{variant} evaluation result does not match the requested cache/settings')
+            report['ema_results'][variant] = dict(
+                hf_model=str(ema_hf), result=str(ema_result_path),
+                bpb=ema_result['bpb'], evaltime=ema_result['evaltime'],
+            )
+    return report
 
 
 def main(argv=None):

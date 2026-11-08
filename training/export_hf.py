@@ -177,6 +177,10 @@ def export_checkpoint(args):
     training_length = settings['model']['context_length']
     max_length = args.max_sequence_length or training_length
     native_state = checkpoint['model']
+    ema_variant = getattr(args, 'ema', None)
+    if ema_variant:
+        from weight_ema import select_ema_weights
+        native_state = select_ema_weights(checkpoint, ema_variant)
     if settings['model']['tie_word_embeddings']:
         embedding, projection = native_state['embeddings.weight'], native_state['lm_head.w_out.weight']
         if embedding.data_ptr() != projection.data_ptr() and not torch.equal(embedding, projection):
@@ -243,6 +247,7 @@ def export_checkpoint(args):
     record = {
         'status': 'validating', 'source_checkpoint': str(args.checkpoint),
         'source_step': checkpoint['step'], 'source_model_config': settings['model'],
+        'source_weights': ema_variant or 'raw',
         'training_context_length': training_length, 'max_position_embeddings': max_length,
         'model_type': hf_config.model_type, 'mapped_tensor_count': len(converted),
         'dtype': ('bfloat16_with_fp32_gdn_norms_and_residual_mixing'
@@ -373,6 +378,7 @@ def main():
     source.add_argument('--checkpoint', type=Path)
     source.add_argument('--source-hf', type=Path)
     parser.add_argument('--tokenizer-dir', type=Path)
+    parser.add_argument('--ema', help='Export an EMA variant from the checkpoint')
     parser.add_argument('--output-dir', required=True, type=Path)
     parser.add_argument('--max-shard-size', default='2GB')
     parser.add_argument('--max-sequence-length', type=int)
@@ -381,6 +387,8 @@ def main():
     parser.add_argument('--logits-atol', type=float, default=1e-4)
     parser.add_argument('--logits-rtol', type=float, default=1e-4)
     args = parser.parse_args()
+    if args.ema and not args.checkpoint:
+        parser.error('--ema requires --checkpoint')
     if args.output_dir.exists() and (
         not args.output_dir.is_dir() or any(
             path.name != '.gitkeep' or not path.is_file() or path.stat().st_size != 0
