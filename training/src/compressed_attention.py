@@ -1,4 +1,4 @@
-"""Causal 128-token K/V compression beside one existing attention layer.
+"""Causal blockwise K/V compression beside one existing attention layer.
 """
 
 from __future__ import annotations

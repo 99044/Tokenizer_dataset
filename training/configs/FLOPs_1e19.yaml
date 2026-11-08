@@ -1,21 +1,21 @@
 run:
-  name: wide_compressed_1024_1e19_muon
+  name: wide_330m_block388_plateau_1e19_8gpu_muon
   seed: 42
 scaling:
-  family: wide_compressed_24k
+  family: wide_330m_block388_32k
   nominal_size: 330m_trunk
-  expected_total_parameters: 1163259328
+  expected_total_parameters: 1171647936
   expected_branch_parameters: 831520768
-  parameter_count_vocab_size: 24576
+  parameter_count_vocab_size: 32768
   tokens_per_update: 524288
   flops_accounting: Hybrid ledger plus compressed-branch upper estimate
 budget:
   total_training_flops: 10000000000000000000
-  planned_training_flops: 9899423883164631040
-  planned_training_tokens: 4364173312
-  flops_per_token_numerator: 18582231880640
+  planned_training_flops: 9899051437238652928
+  planned_training_tokens: 4269277184
+  flops_per_token_numerator: 18994557129664
   flops_per_token_denominator: 8192
-  flops_per_update: 1189262840360960
+  flops_per_update: 1215651656298496
 model:
   type: olmo_hybrid_scaling
   num_layers: 16
@@ -51,7 +51,7 @@ model:
   gdn_conv_size: 4
   gdn_norm_eps: 1.0e-05
   context_length: 8192
-  vocab_size: 24576
+  vocab_size: 32768
   tie_word_embeddings: true
   attention_bias: false
   mlp_bias: false
@@ -63,13 +63,10 @@ model:
     scale: 0.001
 training:
   dtype: bfloat16
-  max_steps: 8324
+  max_steps: 8143
   micro_batch_size: 1
   gradient_accumulation_steps: 8
   gradient_checkpointing: false
-  gdn_fp32_retry_grad_norm: 100.0
-  gdn_fp32_recovery_steps: 16
-  gdn_recurrent_fp32: true
 optimizer:
   name: muon
   learning_rate: 0.003
@@ -84,10 +81,11 @@ optimizer:
   expert_wise: true
   nesterov: false
   use_triton: false
+  legacy_compressed_muon_split: true
 scheduler:
   name: linear_cooldown
-  warmup_steps: 333
-  cooldown_steps: 2497
+  warmup_steps: 326
+  cooldown_steps: 2443
   final_lr_ratio: 0.01
 data:
   tokenizer_path: null
@@ -100,37 +98,28 @@ logging:
   entity: echo-lab
   project: scicomp26
   log_every_steps: 5
-  eval_every_steps: 8324
+  eval_every_steps: 8143
   eval_batches: 8
   final_eval_batches: 64
-  checkpoint_every_steps: 8324
+  checkpoint_every_steps: 8143
   checkpoint_steps:
-  - 416
-  - 832
-  - 1249
-  - 1665
-  - 2081
-  - 2497
-  - 2913
-  - 3330
-  - 3746
-  - 4162
-  - 4578
-  - 4994
-  - 5411
-  - 5827
-  - 6243
-  - 6659
-  - 7075
-  - 7492
-  - 7908
+  - 100
+  - 814
+  - 1629
+  - 2443
+  - 3257
+  - 4072
+  - 4886
+  - 5700
+  - 6514
+  - 7329
   checkpoint_keep_last: 2
 output:
-  directory: runs/submission_20261103/1e19
-submission:
-  target_date: '2026-11-03'
-  budget_tier: 1e19
-  data_parallel_size: 8
+  directory: runs/submission_1108/1e19
 initialization:
   projection_scale: 0.8
   repair_gdn_a_log: true
+submission:
+  target_date: '2026-11-08'
+  budget_tier: 1e19
+  data_parallel_size: 8

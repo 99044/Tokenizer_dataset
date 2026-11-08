@@ -7,7 +7,8 @@ from pathlib import Path
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from optimizer_factory import AdamWDtypeBuckets, build_optimizer
+from compressed_attention import CompressedKVBranch
+from optimizer_factory import AdamWDtypeBuckets, _matrix_and_scalar_parameters, build_optimizer
 
 
 class FusedAdamWTasks(torch.optim.Optimizer):
@@ -46,6 +47,26 @@ class CompatibleAdamWTasks(AdamWDtypeBuckets, FusedAdamWTasks):
 
 
 class DtypeBucketTests(unittest.TestCase):
+    def test_legacy_compression_grouping_preserves_large_adamw_matrices(self):
+        model = torch.nn.Module()
+        model.embeddings = torch.nn.Embedding(8, 8)
+        model.attention = torch.nn.Module()
+        model.attention.compressed = CompressedKVBranch(
+            8, 2, 2, 16, device=torch.device('cpu'), dtype=torch.float32,
+        )
+        model.ffn = torch.nn.Linear(8, 8, bias=False)
+        matrix, scalar = _matrix_and_scalar_parameters(
+            model, protect_large_compression=True,
+        )
+        matrix_names = {name for name, _ in matrix}
+        scalar_names = {name for name, _ in scalar}
+        for projection in ('k_compress', 'v_compress'):
+            name = f'attention.compressed.{projection}.weight'
+            self.assertIn(name, scalar_names)
+            self.assertNotIn(name, matrix_names)
+        self.assertIn('attention.compressed.k_up.weight', matrix_names)
+        self.assertIn('ffn.weight', matrix_names)
+
     @unittest.skipUnless(importlib.util.find_spec('dion'), 'requires the pinned Dion environment')
     def test_real_muon_factory_steps_and_restores_mixed_dtype_state(self):
         model = torch.nn.Module()

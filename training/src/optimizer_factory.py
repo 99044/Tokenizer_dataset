@@ -56,6 +56,7 @@ def _positive_float(value: Any, field: str, *, allow_zero: bool = False) -> floa
 def _matrix_and_scalar_parameters(
     model: nn.Module,
     excluded_parameter_ids: frozenset[int] = frozenset(),
+    protect_large_compression: bool = False,
 ) -> tuple[tuple[tuple[str, nn.Parameter], ...], tuple[tuple[str, nn.Parameter], ...]]:
     """Separate internal matrices from embedding, output, convolution and vectors."""
 
@@ -89,6 +90,12 @@ def _matrix_and_scalar_parameters(
         for parameter in module.parameters(recurse=False)
     }
     protected_ids = embedding_ids | output_ids | convolution_ids
+    if protect_large_compression:
+        protected_ids |= {
+            id(parameter) for name, parameter in named
+            if name.endswith(("attention.compressed.k_compress.weight",
+                              "attention.compressed.v_compress.weight"))
+        }
     matrix = tuple(
         (name, parameter)
         for name, parameter in named
@@ -151,6 +158,11 @@ def build_optimizer(
     compressed_algorithm = config.get("compressed_branch")
     if compressed_algorithm not in {None, "adamw"}:
         raise ValueError("optimizer.compressed_branch must be adamw when specified")
+    legacy_compressed_muon_split = config.get("legacy_compressed_muon_split", False)
+    if not isinstance(legacy_compressed_muon_split, bool):
+        raise ValueError("optimizer.legacy_compressed_muon_split must be boolean")
+    if legacy_compressed_muon_split and (name not in {"muon", "normuon"} or compressed_algorithm is not None):
+        raise ValueError("legacy compressed Muon grouping requires Muon without a separate compressed branch")
     compressed_ids = frozenset()
     if compressed_algorithm == "adamw":
         compressed_ids = frozenset(
@@ -183,7 +195,9 @@ def build_optimizer(
         return optimizer, _report(name, [group])
 
     if name in {"muon", "normuon"}:
-        matrix, scalar = _matrix_and_scalar_parameters(model, compressed_ids)
+        matrix, scalar = _matrix_and_scalar_parameters(
+            model, compressed_ids, protect_large_compression=legacy_compressed_muon_split,
+        )
         if parameter_map is not None:
             matrix = tuple((name, parameter_map[id(parameter)]) for name, parameter in matrix)
             scalar = tuple((name, parameter_map[id(parameter)]) for name, parameter in scalar)

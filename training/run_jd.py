@@ -20,7 +20,7 @@ import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_CONFIG = ROOT / 'training/configs/FLOPs_1e19_1.yaml'
+DEFAULT_CONFIG = ROOT / 'training/configs/FLOPs_3e17.yaml'
 
 
 def arguments(argv=None):
@@ -301,6 +301,12 @@ def main(argv=None):
                            TRITON_F32_DEFAULT='ieee', PYTHON=sys.executable)
         environment.setdefault('OMP_NUM_THREADS', '1')
         environment['TOKEN_CACHE_VALIDATION_DIR'] = str(output / 'cache-validation')
+        cache = output / 'compiler-cache'
+        for name in ('inductor', 'triton', 'tmp'):
+            (cache / name).mkdir(parents=True, exist_ok=True)
+        environment['TORCHINDUCTOR_CACHE_DIR'] = str(cache / 'inductor')
+        environment['TRITON_CACHE_DIR'] = str(cache / 'triton')
+        environment['TMPDIR'] = str(cache / 'tmp')
         try:
             checkpoint = train_to_completion(args, settings, environment)
             report = postprocess(args, settings, checked, environment, checkpoint)
