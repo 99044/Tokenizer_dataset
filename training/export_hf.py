@@ -249,10 +249,11 @@ def export_checkpoint(args):
     converted = {name: value.contiguous() for name, value in
                  convert_state_to_hf(hf_config, native_state).items()}
     for name, value in converted.items():
-        fp32_parameter = hybrid and (
+        fp32_tensor = (hybrid and (
             name.endswith('.o_norm.weight') or '.dual_residual_mixing.' in name
-        )
-        expected_dtype = torch.float32 if fp32_parameter else torch.bfloat16
+        )) or (qwen_moe and getattr(hf_config, 'hi_moe', None)
+                and name.endswith('.mlp.gate.himoe_logits_ema'))
+        expected_dtype = torch.float32 if fp32_tensor else torch.bfloat16
         if value.dtype != expected_dtype:
             raise ValueError(f'checkpoint weight {name} has dtype {value.dtype}, expected {expected_dtype}')
     with torch.device('meta'):
@@ -278,7 +279,9 @@ def export_checkpoint(args):
         'source_weights': ema_variant or 'raw',
         'training_context_length': training_length, 'max_position_embeddings': max_length,
         'model_type': hf_config.model_type, 'mapped_tensor_count': len(converted),
-        'dtype': ('bfloat16_with_fp32_gdn_norms_and_residual_mixing'
+        'dtype': ('bfloat16_with_fp32_router_ema'
+                  if qwen_moe and getattr(hf_config, 'hi_moe', None)
+                  else 'bfloat16_with_fp32_gdn_norms_and_residual_mixing'
                   if hybrid and getattr(hf_config, 'dual_residual', None)
                   else 'bfloat16_with_fp32_gdn_norms' if hybrid else 'bfloat16'),
         'trust_remote_code_required': hybrid or (qwen_moe and getattr(hf_config, 'hi_moe', None) is not None),
