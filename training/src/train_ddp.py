@@ -649,6 +649,11 @@ def main():
                     metrics['train/weighted_token_nll'] = ce
                 if rank == 0:
                     metrics.update(balance.metrics())
+                    # Counts already span every microbatch and all DDP ranks.
+                    layer_counts = balance.counts.float()
+                    metrics['train/router_layer_max_to_mean'] = (
+                        layer_counts.amax(dim=1) / layer_counts.mean(dim=1)
+                    ).tolist()
             for index, group in enumerate(optimizer_report['groups']):
                 metrics[f"lr/{group['name']}"] = used_group_lrs[index]
             stage_boundary = False

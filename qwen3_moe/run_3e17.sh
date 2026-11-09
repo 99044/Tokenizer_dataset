@@ -6,7 +6,12 @@ if (( $# < 3 || $# > 4 )); then
     exit 2
 fi
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-export TRAIN_CONFIG="$root/qwen3_moe/configs/3e17/training.yaml"
-output=${4:-"$root/runs/qwen3-moe-paper-3e17-$(date +%Y%m%d-%H%M%S)-$$"}
+variant=${MOE_EXPERT_VARIANT:-e24-k2-w512}
+export EVAL_BATCH_SIZE=${EVAL_BATCH_SIZE:-64}
+output=${4:-"$root/runs/qwen3-moe-paper-3e17-$variant-$(date +%Y%m%d-%H%M%S)-$$"}
+config_dir=$(mktemp -d)
+trap 'rm -f -- "$config_dir/training.yaml"; rmdir -- "$config_dir"' EXIT
+export TRAIN_CONFIG="$config_dir/training.yaml"
+"${PYTHON:-python}" "$root/qwen3_moe/expert_ablation.py" plan "$variant" "$TRAIN_CONFIG"
 echo "3e17 run output: $output"
-exec bash "$root/qwen3_moe/run_all.sh" 3e17 "$1" "$2" "$3" "$output"
+bash "$root/qwen3_moe/run_all.sh" 3e17 "$1" "$2" "$3" "$output"

@@ -42,5 +42,6 @@ if len(devices) != settings["submission"]["data_parallel_size"] or len(set(devic
     raise ValueError("Visible GPU count differs from the fixed training plan")
 PY
 bash "$root/qwen3_moe_a30m/run_all.sh" "$@"
+cp -- "$TRAIN_CONFIG" "$4/training-config.yaml"
 "${PYTHON:-python}" "$root/training/audit_qwen3_moe_flops.py" \
-    --config "$TRAIN_CONFIG" --metrics "$4/train/metrics.jsonl" --output "$4/flops-report.json"
+    --config "$4/training-config.yaml" --metrics "$4/train/metrics.jsonl" --output "$4/flops-report.json"
