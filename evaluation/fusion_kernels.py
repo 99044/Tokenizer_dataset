@@ -20,7 +20,7 @@ def _silu_mul_packed_kernel(output, gate_up, output_stride, gate_up_stride,
 
 @triton.jit
 def _rms_norm_kernel(output, inputs, weight, row_stride, width: tl.constexpr,
-                     eps: tl.constexpr, BLOCK_SIZE: tl.constexpr):
+                     eps: tl.constexpr, CAST_BEFORE_WEIGHT: tl.constexpr, BLOCK_SIZE: tl.constexpr):
     row = tl.program_id(0).to(tl.int64)
     offsets = tl.arange(0, BLOCK_SIZE)
     mask = offsets < width
@@ -28,6 +28,8 @@ def _rms_norm_kernel(output, inputs, weight, row_stride, width: tl.constexpr,
                      other=0.0).to(tl.float32)
     variance = tl.sum(values * values, axis=0) / width
     normalized = values * tl.rsqrt(variance + eps)
+    if CAST_BEFORE_WEIGHT:
+        normalized = normalized.to(inputs.dtype.element_ty).to(tl.float32)
     weights = tl.load(weight + offsets, mask=mask, other=0.0).to(tl.float32)
     tl.store(output + row * row_stride + offsets, normalized * weights, mask=mask)
 
@@ -48,7 +50,7 @@ def fused_silu_mul_packed(gate_up):
     return output
 
 
-def fused_rms_norm(inputs, weight, eps):
+def fused_rms_norm(inputs, weight, eps, *, cast_before_weight=False):
     if not inputs.is_cuda or inputs.stride(-1) != 1:
         raise ValueError('fused RMSNorm requires CUDA input contiguous in its last axis')
     if weight.ndim != 1 or weight.numel() != inputs.shape[-1]:
@@ -60,5 +62,6 @@ def fused_rms_norm(inputs, weight, eps):
     block = triton.next_power_of_2(width)
     warps = 4 if block <= 2048 else 8
     _rms_norm_kernel[(rows,)](output, contiguous, weight, width, width=width,
-                              eps=eps, BLOCK_SIZE=block, num_warps=warps)
+                              eps=eps, CAST_BEFORE_WEIGHT=cast_before_weight,
+                              BLOCK_SIZE=block, num_warps=warps)
     return output.view_as(inputs)

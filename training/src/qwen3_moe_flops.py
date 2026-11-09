@@ -2,7 +2,7 @@
 
 GEMMs use 2mnk, with separate forward/input-gradient/weight-gradient entries.
 Ordinary Transformer elementwise/loss terms follow the reference exclusions.
-Routing exp/divide use an explicit one-operation convention: the supplied
+Routing exp/log/divide use an explicit one-operation convention: the supplied
 rules do not publish their weights. This is not organizer certification.
 """
 
@@ -15,7 +15,7 @@ from types import SimpleNamespace
 
 from graph_accounting import gemm_operations, operation_flops
 
-PROTOCOL = "scicomp26-megatron-qwen3-moe-router-v1"
+PROTOCOL = "scicomp26-megatron-qwen3-moe-router-zloss-v2"
 REFERENCE = Path(__file__).with_name("flops_reference")
 REFERENCE_SHA256 = "4d6e6daf89926f83f4e5009f337540cf1f16850e1b18d9b1c6cb6fb74b93fc97"
 SCALAR_COST = 1
@@ -72,11 +72,11 @@ def routing_ledger(config, tokens, *, include_input_scatter=True, include_loss_w
     def add(name, kind, elements, phase="forward", copies=layers):
         if elements <= 0:
             return
-        if kind in {"exp", "divide"}:
+        if kind in {"exp", "log", "divide"}:
             operations.append(dict(name=name, kind="audited_scalar", operation=kind,
                                    elements=elements, calls=copies, phase=phase,
                                    flops_per_element=SCALAR_COST,
-                                   counting_basis="Declared exp/divide cost 1; not specified by supplied rule"))
+                                   counting_basis="Declared exp/log/divide cost 1; not specified by supplied rule"))
         else:
             operations.append(dict(name=name, kind=kind, elements=elements, calls=copies, phase=phase))
 
@@ -121,6 +121,31 @@ def routing_ledger(config, tokens, *, include_input_scatter=True, include_loss_w
         add("auxiliary.loss_coefficient", "multiply", 1, copies=1)
         add("auxiliary.loss_add", "add", 1, copies=1)
         add("auxiliary.loss_coefficient_gradient", "multiply", 1, "backward", copies=1)
+    if config.get("router_z_loss_coef", 0):
+        # logsumexp: max comparisons are not FLOPs. The stable arithmetic is
+        # subtract, exp, reduce-sum, log, and restore max; backward is
+        # exp(logits - logsumexp) * upstream gradient. square' uses 2*x*grad.
+        add("z_loss.logsumexp.subtract_max", "subtract", tokens * experts)
+        add("z_loss.logsumexp.exp", "exp", tokens * experts)
+        add("z_loss.logsumexp.sum", "add", tokens * (experts - 1))
+        add("z_loss.logsumexp.log", "log", tokens)
+        add("z_loss.logsumexp.restore_max", "add", tokens)
+        add("z_loss.square", "multiply", tokens)
+        add("z_loss.token_mean_sum", "add", tokens - 1)
+        add("z_loss.token_mean_divide", "divide", 1)
+        add("z_loss.layer_mean_sum", "add", layers - 1, copies=1)
+        add("z_loss.layer_mean_divide", "divide", 1, copies=1)
+        add("z_loss.layer_mean_gradient", "divide", 1, "backward")
+        add("z_loss.token_mean_gradient", "divide", tokens, "backward")
+        add("z_loss.square_gradient", "multiply", 2 * tokens, "backward")
+        add("z_loss.logsumexp.gradient_subtract", "subtract", tokens * experts, "backward")
+        add("z_loss.logsumexp.gradient_exp", "exp", tokens * experts, "backward")
+        add("z_loss.logsumexp.gradient_product", "multiply", tokens * experts, "backward")
+        add("z_loss.router_gradient_merge", "add", tokens * experts, "backward")
+        if include_loss_weight:
+            add("z_loss.loss_coefficient", "multiply", 1, copies=1)
+            add("z_loss.loss_add", "add", 1, copies=1)
+            add("z_loss.loss_coefficient_gradient", "multiply", 1, "backward", copies=1)
     return operations
 
 
@@ -160,8 +185,8 @@ def cost_breakdown(config, sequence, micro_batch_size=1):
         "router_forward": phases["forward"], "router_backward": phases["backward"],
         "router_operations": operations,
         "components": dict(base, router_supplement=sum(phases.values())),
-        "scalar_costs": {"exp": SCALAR_COST, "divide": SCALAR_COST},
-        "scalar_costs_status": "Explicit convention; the supplied rules do not assign exp/divide weights",
+        "scalar_costs": {"exp": SCALAR_COST, "log": SCALAR_COST, "divide": SCALAR_COST},
+        "scalar_costs_status": "Explicit convention; the supplied rules do not assign exp/log/divide weights",
         "non_flop_operations": ["top-k comparisons", "integer routing counts", "indexing", "copies and casts"],
         "reference_exclusions": ["ordinary Transformer normalization/activation/RoPE/attention-softmax/LM-loss elementwise terms"],
         "excluded_by_supplied_rules": ["optimizer updates", "activation recomputation", "communication"],
@@ -169,5 +194,6 @@ def cost_breakdown(config, sequence, micro_batch_size=1):
             "https://github.com/huggingface/transformers/blob/v5.18.0/src/transformers/models/qwen3_moe/modeling_qwen3_moe.py",
             "https://github.com/pytorch/pytorch/blob/v2.6.0/torch/csrc/autograd/FunctionsManual.cpp",
             "training/src/qwen3_moe_training.py:AccumulatedRouterBalance",
+            "training/src/qwen3_moe_training.py:router_z_loss",
         ],
     }

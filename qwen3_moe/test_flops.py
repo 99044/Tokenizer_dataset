@@ -44,7 +44,7 @@ class FlopsTests(unittest.TestCase):
         config, _, _ = make_recipe("3e17")
         single = qwen3_moe_cost(config, 2048, protocol=PROTOCOL)[0]
         double = qwen3_moe_cost(config, 2048, protocol=PROTOCOL, micro_batch_size=2)[0]
-        constant = config["num_hidden_layers"] * (4 * config["num_experts"] + 1) + 5
+        constant = config["num_hidden_layers"] * (4 * config["num_experts"] + 3) + 8
         self.assertEqual(2 * single - double, constant)
 
     def test_reference_snapshot_is_the_previously_reviewed_function(self):

@@ -40,7 +40,7 @@ class Qwen3MoeTrainingModel(nn.Module):
         rotary.original_inv_freq = rotary.inv_freq.clone()
 
     def forward(self, input_ids, *, route=False):
-        if input_ids.is_cuda:
+        if input_ids.is_cuda and self.lm.config._attn_implementation == "sdpa":
             with sdpa_kernel(SDPBackend.FLASH_ATTENTION):
                 return self._forward(input_ids, route)
         return self._forward(input_ids, route)
@@ -50,6 +50,14 @@ class Qwen3MoeTrainingModel(nn.Module):
         output = self.lm.model(input_ids=input_ids, use_cache=False, output_router_logits=route)
         logits = self.lm.lm_head(output.last_hidden_state)
         return (logits, output.router_logits) if route else logits
+
+
+def router_z_loss(router_logits):
+    """FP32 mean of squared router log-partitions, over layers and tokens."""
+    if not router_logits:
+        raise ValueError("Router Z-loss requires logits from every MoE layer")
+    return torch.stack([logits.float().logsumexp(dim=-1).square().mean()
+                        for logits in router_logits]).mean()
 
 
 class AccumulatedRouterBalance:

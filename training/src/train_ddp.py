@@ -213,7 +213,7 @@ def main():
         config, context_length, settings = build_model_config(args.config, vocab_size)
         is_qwen_moe = settings['model']['type'] == 'qwen3_moe'
         if is_qwen_moe:
-            from qwen3_moe_training import AccumulatedRouterBalance
+            from qwen3_moe_training import AccumulatedRouterBalance, router_z_loss
             from training_data import PACKED_FORMAT, normalize_data_metadata
 
             if metadata.get('format') != PACKED_FORMAT:
@@ -237,6 +237,15 @@ def main():
         config.init_seed = seed
         model = config.build(init_device='cpu')
         model.init_weights(max_seq_len=context_length, device=device)
+        acceleration_report = None
+        if is_qwen_moe:
+            from h800_acceleration import install_h800_acceleration
+
+            acceleration_report = install_h800_acceleration(
+                model.lm, settings['training'].get('h800_acceleration'),
+            )
+            if rank == 0:
+                print(f'H800 acceleration: {acceleration_report}', flush=True)
         if is_qwen_moe:
             initialization_repairs = []
             scaled_parameters = []
@@ -267,7 +276,8 @@ def main():
         if use_fp32_master and settings['optimizer']['name'].lower() not in {'adamw', 'soap', 'muon', 'normuon'}:
             raise ValueError('FP32 master weights require AdamW, SOAP, Muon or NorMuon')
         # DDP broadcasts initial weights before their FP32 copies are created.
-        ddp = DDP(model, device_ids=[local_rank], broadcast_buffers=False)
+        ddp = DDP(model, device_ids=[local_rank], broadcast_buffers=False,
+                  gradient_as_bucket_view=is_qwen_moe)
         master_weights = FP32MasterWeights(model) if use_fp32_master else None
         optimizer, optimizer_report = build_optimizer(
             model,
@@ -335,6 +345,9 @@ def main():
             micro_batch_size=args.micro_batch_size, grad_accum_steps=args.grad_accum_steps,
             learning_rate=args.learning_rate, settings=settings, data=metadata,
         )
+        if is_qwen_moe:
+            plan['acceleration'] = acceleration_report
+            plan['ddp_gradient_as_bucket_view'] = True
         start_step = 0
         resumed_rng = None
         checkpoint_path = args.resume or args.branch_from
@@ -520,6 +533,8 @@ def main():
                 local_loss = torch.zeros((), device=device)
                 balance = AccumulatedRouterBalance(model.lm.config, device) if is_qwen_moe else None
                 local_aux = torch.zeros_like(local_loss) if is_qwen_moe else None
+                local_z = torch.zeros_like(local_loss) if is_qwen_moe else None
+                z_coefficient = getattr(model.lm.config, 'router_z_loss_coef', 0.0) if is_qwen_moe else 0.0
                 for micro_step in range(grad_accum_steps):
                     if gdn_guard is not None:
                         gdn_guard.set_context(step, micro_step)
@@ -535,6 +550,11 @@ def main():
                             aux = balance(router_logits)
                             loss = loss + model.lm.config.router_aux_loss_coef * aux
                             local_aux += aux.detach() / grad_accum_steps
+                            if z_coefficient:
+                                z_loss = router_z_loss(router_logits)
+                                loss = loss + z_coefficient * z_loss
+                                local_z += z_loss.detach() / grad_accum_steps
+                                del z_loss
                             del router_logits, aux
                         (loss / grad_accum_steps).backward()
                         local_loss += loss.detach() / grad_accum_steps
@@ -599,7 +619,12 @@ def main():
                 dist.all_reduce(local_aux)
                 mean_aux = (local_aux / world).item()
                 metrics['train/router_aux_loss'] = mean_aux
-                metrics['train/token_nll'] = mean_loss - model.lm.config.router_aux_loss_coef * mean_aux
+                dist.all_reduce(local_z)
+                mean_z = (local_z / world).item()
+                metrics['train/router_z_loss'] = mean_z
+                metrics['train/router_z_loss_weighted'] = z_coefficient * mean_z
+                metrics['train/token_nll'] = (mean_loss - model.lm.config.router_aux_loss_coef * mean_aux
+                                               - z_coefficient * mean_z)
                 if rank == 0:
                     metrics.update(balance.metrics())
             for index, group in enumerate(optimizer_report['groups']):

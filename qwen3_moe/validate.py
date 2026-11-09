@@ -15,7 +15,7 @@ sys.path.insert(0, str(ROOT.parent))
 from qwen3_moe.plan import TIERS, make_recipe
 from fp32_master import FP32MasterWeights
 from optimizer_factory import build_optimizer
-from qwen3_moe_training import AccumulatedRouterBalance, Qwen3MoeTrainingConfig
+from qwen3_moe_training import AccumulatedRouterBalance, Qwen3MoeTrainingConfig, router_z_loss
 from qwen3_moe_rules import validate_family_settings
 
 
@@ -68,7 +68,8 @@ def main():
                 logits, routers = model(inputs, route=True)
                 aux = balance(routers)
                 ce = F.cross_entropy(logits.float().reshape(-1, 32), labels.flatten())
-                loss = (ce + config["router_aux_loss_coef"] * aux) / 2
+                loss = (ce + config["router_aux_loss_coef"] * aux
+                        + config["router_z_loss_coef"] * router_z_loss(routers)) / 2
                 assert torch.isfinite(loss)
                 loss.backward()
             assert torch.all(balance.counts.sum(-1) == 32 * config["num_experts_per_tok"])

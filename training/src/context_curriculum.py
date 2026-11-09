@@ -118,13 +118,13 @@ def _build_qwen3_moe_curriculum(settings, reference):
             kind=protocol or "qwen3_moe_prediction_graph",
             official_ledger=False,
             **({"reference_matched": True, "router_graph_audited": True,
-                "scalar_costs": {"exp": 1, "divide": 1}} if protocol else {}),
+                "scalar_costs": {"exp": 1, "log": 1, "divide": 1}} if protocol else {}),
             **({} if target_tokens is None else {
                 "target_training_tokens": target_tokens,
                 "allocation": "whole-update token target; reserve 20% of updates for 4K and maximize 8K within the FLOPs cap",
             }),
-            limitations=("Megatron reference plus source-derived routing/auxiliary-loss arithmetic. "
-                         "Exp/divide cost 1 is an explicit convention, not specified by the supplied rule. "
+            limitations=("Megatron reference plus source-derived routing/auxiliary/Z-loss arithmetic. "
+                         "Exp/log/divide cost 1 is an explicit convention, not specified by the supplied rule. "
                          "Ordinary Transformer elementwise/LM-loss terms follow reference exclusions; "
                          "optimizer, recomputation and communication are excluded. Not organizer certification."
                          if protocol else "Excludes expert dispatch, top-k selection, language-model and router auxiliary losses, optimizer, communication and activation recomputation."),

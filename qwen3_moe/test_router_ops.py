@@ -20,7 +20,7 @@ class RouterGraphTests(unittest.TestCase):
         from torch.utils._python_dispatch import TorchDispatchMode
         from transformers import Qwen3MoeConfig
         from transformers.models.qwen3_moe.modeling_qwen3_moe import Qwen3MoeTopKRouter
-        from qwen3_moe_training import AccumulatedRouterBalance
+        from qwen3_moe_training import AccumulatedRouterBalance, router_z_loss
         from qwen3_moe_flops import routing_ledger
         from graph_accounting import operation_flops
 
@@ -39,7 +39,13 @@ class RouterGraphTests(unittest.TestCase):
                     cost = 2 * args[0].shape[0] * args[0].shape[1] * args[1].shape[1]
                 elif name in {"aten._softmax.default", "aten._softmax_backward_data.default"}:
                     cost = 4 * out.numel() - out.numel() // out.shape[-1]
-                elif name.startswith(("aten.mul.", "aten.div.", "aten.div_.", "aten.add.", "aten.add_.", "aten.neg.")):
+                elif name == "aten.logsumexp.default":
+                    cost = 3 * args[0].numel() + out.numel()
+                elif name == "aten.pow.Tensor_Scalar":
+                    if args[1] not in {1, 2}:
+                        raise AssertionError(f"Unexpected power {args[1]}")
+                    cost = out.numel() if args[1] == 2 else 0
+                elif name.startswith(("aten.mul.", "aten.div.", "aten.div_.", "aten.add.", "aten.add_.", "aten.neg.", "aten.sub.", "aten.exp.")):
                     cost = out.numel()
                 elif name.startswith("aten.sum."):
                     cost = args[0].numel() - out.numel()
@@ -58,7 +64,10 @@ class RouterGraphTests(unittest.TestCase):
                 return out
 
         torch.set_num_threads(2)
-        for tokens, hidden, experts, top_k, layers in ((3, 8, 12, 2, 2), (5, 16, 20, 4, 1)):
+        for tokens, hidden, experts, top_k, layers, use_z, weighted in (
+            (3, 8, 12, 2, 2, False, False), (3, 8, 12, 2, 2, True, False),
+            (3, 8, 12, 2, 2, True, True), (5, 16, 20, 4, 1, True, True),
+        ):
             config = Qwen3MoeConfig(hidden_size=hidden, num_experts=experts,
                                     num_experts_per_tok=top_k, num_hidden_layers=layers, norm_topk_prob=True)
             routers = [Qwen3MoeTopKRouter(config) for _ in range(layers)]
@@ -76,11 +85,21 @@ class RouterGraphTests(unittest.TestCase):
                     output.index_add_(0, ids, (values_i * weights[:, :, None]).reshape(-1, hidden))
                     outputs.append(output)
                 auxiliary = AccumulatedRouterBalance(config, torch.device("cpu"))(all_logits)
+                losses = [auxiliary]
+                if use_z:
+                    losses.append(router_z_loss(all_logits))
+                if weighted:
+                    # Two scalar coefficients and two additions to token CE.
+                    # The actual token-CE derivative is supplied via outputs.
+                    penalty = losses[0] * 0.001 + torch.zeros(())
+                    if use_z:
+                        penalty = penalty + losses[1] * 0.001
+                    losses = [penalty]
                 counter.phase = "backward"
-                torch.autograd.backward(outputs + [auxiliary], gradients + [torch.ones(())])
+                torch.autograd.backward(outputs + losses, gradients + [torch.ones(()) for _ in losses])
             declared = dict(num_hidden_layers=layers, hidden_size=hidden, num_experts=experts,
-                            num_experts_per_tok=top_k, norm_topk_prob=True)
-            ledger = routing_ledger(declared, tokens, include_input_scatter=False, include_loss_weight=False)
+                            num_experts_per_tok=top_k, norm_topk_prob=True, router_z_loss_coef=0.001 if use_z else 0)
+            ledger = routing_ledger(declared, tokens, include_input_scatter=False, include_loss_weight=weighted)
             for phase in ("forward", "backward"):
                 expected = sum(operation_flops(op) for op in ledger if op["phase"] == phase)
                 self.assertEqual(counter.totals[phase], expected, (tokens, experts, phase))

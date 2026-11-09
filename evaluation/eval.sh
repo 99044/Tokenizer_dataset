@@ -32,8 +32,8 @@ if [[ ! "$batch_size" =~ ^[0-9]+$ ]] || (( batch_size < 1 )); then
     echo "BATCH_SIZE must be a positive integer" >&2
     exit 2
 fi
-if [[ "$fusion_mode" != none && "$fusion_mode" != ffn_rmsnorm ]]; then
-    echo "FUSION_MODE must be none or ffn_rmsnorm" >&2
+if [[ "$fusion_mode" != none && "$fusion_mode" != rmsnorm && "$fusion_mode" != ffn_rmsnorm ]]; then
+    echo "FUSION_MODE must be none, rmsnorm or ffn_rmsnorm" >&2
     exit 2
 fi
 if [[ -e "$output" ]]; then

@@ -9,22 +9,22 @@
   "active_non_vocabulary_parameters": 26073984,
   "active_non_vocabulary_fraction": 0.10042194342438221,
   "minimum_active_non_vocabulary_fraction": 0.1,
-  "architecture_family_id": "04d2c5476fd93849511136830a4410ca95d83c3ce620f9dc6375dd7182ceb305",
+  "architecture_family_id": "148f42b962720776269df7565e0c435aa4f96601c9d41dd576b4d759da37f433",
   "expert_granularity": "1/2",
   "expert_activation_sparsity": 12.0,
   "tokens_per_update": 524288,
   "optimizer_updates": 6006,
   "planned_training_tokens": 3148873728,
   "target_flops": 1000000000000000000,
-  "estimated_training_flops": 999787472668358016,
-  "flops_protocol": "scicomp26-megatron-qwen3-moe-router-v1",
+  "estimated_training_flops": 999794047527080448,
+  "flops_protocol": "scicomp26-megatron-qwen3-moe-router-zloss-v2",
   "megatron_reference_matched": true,
   "router_graph_audited": true,
   "organizer_certified": false,
-  "flops_utilization": 0.999787472668358,
+  "flops_utilization": 0.9997940475270805,
   "training_tokens_per_active_parameter": 70.05537662426423,
-  "persistent_state_lower_bound_gib_per_gpu": 5.7065956592559814,
-  "memory_limitations": "22 bytes/parameter counts BF16 weights/gradients, FP32 masters/gradients, FP32 SOAP moments and BF16 DDP buckets. Excludes SOAP preconditioners, optimizer temporaries, activations, logits, CUDA/NCCL and allocator overhead. DDP replicates all experts on each GPU. Verify peak memory on H800 before a full run.",
+  "persistent_state_lower_bound_gib_per_gpu": 5.187814235687256,
+  "memory_limitations": "20 bytes/parameter counts BF16 weights, shared BF16 gradient/DDP buckets, FP32 masters/gradients and FP32 SOAP moments. Excludes SOAP preconditioners, optimizer temporaries, activations, logits, CUDA/NCCL and allocator overhead. DDP replicates all experts on each GPU. Verify peak memory on H800 before a full run.",
   "reference_8k": {
     "total_parameters": 278518656,
     "parameters_by_component": {
@@ -39,21 +39,21 @@
     "active_parameters_excluding_input_and_output_vocab": 26073984,
     "total_non_vocabulary_parameters": 259644288,
     "active_non_vocabulary_parameters": 26073984,
-    "flops_protocol": "scicomp26-megatron-qwen3-moe-router-v1",
+    "flops_protocol": "scicomp26-megatron-qwen3-moe-router-zloss-v2",
     "world_size": 8,
     "micro_batch_size": 1,
     "grad_accumulation_steps": 8,
     "sequence_length": 8192,
     "tokens_per_update": 524288,
-    "flops_per_microbatch": 3600859989137,
-    "flops_per_token": 439558104.1427002,
-    "flops_per_update": 230455039304768,
+    "flops_per_microbatch": 3600877094060,
+    "flops_per_token": 439560192.1459961,
+    "flops_per_update": 230456134019840,
     "target_flops": 1000000000000000000,
     "optimizer_updates": 4339,
     "planned_training_tokens": 2274885632,
-    "estimated_training_flops": 999944415543388352,
+    "estimated_training_flops": 999949165512085760,
     "attention_core_and_elementwise_flops_per_microbatch": 1855425871872,
-    "accounting": "scicomp26-megatron-qwen3-moe-router-v1",
+    "accounting": "scicomp26-megatron-qwen3-moe-router-zloss-v2",
     "excluded": [
       "ordinary Transformer elementwise terms, following the Megatron reference",
       "top-k comparisons, integer routing counts, indexing, copies and casts are not FLOPs",
@@ -62,14 +62,14 @@
   },
   "flops_audit": {
     "2048": {
-      "protocol": "scicomp26-megatron-qwen3-moe-router-v1",
-      "estimated_total": 2209290585233,
+      "protocol": "scicomp26-megatron-qwen3-moe-router-zloss-v2",
+      "estimated_total": 2209307690156,
       "attention_core_and_elementwise": 463856467968,
       "reference_matched": true,
       "router_graph_audited": true,
       "official_ledger": false,
       "reference_function_sha256": "4d6e6daf89926f83f4e5009f337540cf1f16850e1b18d9b1c6cb6fb74b93fc97",
-      "counter_code_sha256": "be70b6f5fe3c40e634f0ea611feeb6a37c2351521b6e6f65608d4ec24dfd3f40",
+      "counter_code_sha256": "9f6927689b03aaba3f855b4703408d9f34a45793a7e8a6f1fd68e875744f218c",
       "reference_source": "https://github.com/NVIDIA/Megatron-LM/blob/main/megatron/training/training.py",
       "megatron_reference_total": 2203318222848,
       "megatron_components": {
@@ -79,8 +79,8 @@
         "lm_head": 463856467968
       },
       "router_projection_gemm": 5435817984,
-      "router_forward": 1984267107,
-      "router_backward": 3988095278,
+      "router_forward": 1991639921,
+      "router_backward": 3997827387,
       "router_operations": [
         {
           "kind": "matmul",
@@ -124,7 +124,7 @@
           "calls": 12,
           "phase": "forward",
           "flops_per_element": 1,
-          "counting_basis": "Declared exp/divide cost 1; not specified by supplied rule"
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
         },
         {
           "name": "router.softmax.sum",
@@ -141,7 +141,7 @@
           "calls": 12,
           "phase": "forward",
           "flops_per_element": 1,
-          "counting_basis": "Declared exp/divide cost 1; not specified by supplied rule"
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
         },
         {
           "name": "router.softmax.gradient_product",
@@ -179,7 +179,7 @@
           "calls": 12,
           "phase": "forward",
           "flops_per_element": 1,
-          "counting_basis": "Declared exp/divide cost 1; not specified by supplied rule"
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
         },
         {
           "name": "auxiliary.softmax.sum",
@@ -196,7 +196,7 @@
           "calls": 12,
           "phase": "forward",
           "flops_per_element": 1,
-          "counting_basis": "Declared exp/divide cost 1; not specified by supplied rule"
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
         },
         {
           "name": "auxiliary.softmax.gradient_product",
@@ -234,7 +234,7 @@
           "calls": 12,
           "phase": "forward",
           "flops_per_element": 1,
-          "counting_basis": "Declared exp/divide cost 1; not specified by supplied rule"
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
         },
         {
           "name": "topk_normalize.gradient_divisions",
@@ -244,7 +244,7 @@
           "calls": 12,
           "phase": "backward",
           "flops_per_element": 1,
-          "counting_basis": "Declared exp/divide cost 1; not specified by supplied rule"
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
         },
         {
           "name": "topk_normalize.gradient_negate",
@@ -331,7 +331,7 @@
           "calls": 12,
           "phase": "forward",
           "flops_per_element": 1,
-          "counting_basis": "Declared exp/divide cost 1; not specified by supplied rule"
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
         },
         {
           "name": "auxiliary.frequency_divide",
@@ -341,7 +341,7 @@
           "calls": 12,
           "phase": "forward",
           "flops_per_element": 1,
-          "counting_basis": "Declared exp/divide cost 1; not specified by supplied rule"
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
         },
         {
           "name": "auxiliary.frequency_probability_product",
@@ -372,7 +372,7 @@
           "calls": 1,
           "phase": "forward",
           "flops_per_element": 1,
-          "counting_basis": "Declared exp/divide cost 1; not specified by supplied rule"
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
         },
         {
           "name": "auxiliary.expert_scale",
@@ -396,7 +396,7 @@
           "calls": 12,
           "phase": "backward",
           "flops_per_element": 1,
-          "counting_basis": "Declared exp/divide cost 1; not specified by supplied rule"
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
         },
         {
           "name": "auxiliary.probability_gradient_product",
@@ -413,7 +413,7 @@
           "calls": 12,
           "phase": "backward",
           "flops_per_element": 1,
-          "counting_basis": "Declared exp/divide cost 1; not specified by supplied rule"
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
         },
         {
           "name": "auxiliary.router_gradient_merge",
@@ -438,6 +438,167 @@
         },
         {
           "name": "auxiliary.loss_coefficient_gradient",
+          "kind": "multiply",
+          "elements": 1,
+          "calls": 1,
+          "phase": "backward"
+        },
+        {
+          "name": "z_loss.logsumexp.subtract_max",
+          "kind": "subtract",
+          "elements": 196608,
+          "calls": 12,
+          "phase": "forward"
+        },
+        {
+          "name": "z_loss.logsumexp.exp",
+          "kind": "audited_scalar",
+          "operation": "exp",
+          "elements": 196608,
+          "calls": 12,
+          "phase": "forward",
+          "flops_per_element": 1,
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
+        },
+        {
+          "name": "z_loss.logsumexp.sum",
+          "kind": "add",
+          "elements": 188416,
+          "calls": 12,
+          "phase": "forward"
+        },
+        {
+          "name": "z_loss.logsumexp.log",
+          "kind": "audited_scalar",
+          "operation": "log",
+          "elements": 8192,
+          "calls": 12,
+          "phase": "forward",
+          "flops_per_element": 1,
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
+        },
+        {
+          "name": "z_loss.logsumexp.restore_max",
+          "kind": "add",
+          "elements": 8192,
+          "calls": 12,
+          "phase": "forward"
+        },
+        {
+          "name": "z_loss.square",
+          "kind": "multiply",
+          "elements": 8192,
+          "calls": 12,
+          "phase": "forward"
+        },
+        {
+          "name": "z_loss.token_mean_sum",
+          "kind": "add",
+          "elements": 8191,
+          "calls": 12,
+          "phase": "forward"
+        },
+        {
+          "name": "z_loss.token_mean_divide",
+          "kind": "audited_scalar",
+          "operation": "divide",
+          "elements": 1,
+          "calls": 12,
+          "phase": "forward",
+          "flops_per_element": 1,
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
+        },
+        {
+          "name": "z_loss.layer_mean_sum",
+          "kind": "add",
+          "elements": 11,
+          "calls": 1,
+          "phase": "forward"
+        },
+        {
+          "name": "z_loss.layer_mean_divide",
+          "kind": "audited_scalar",
+          "operation": "divide",
+          "elements": 1,
+          "calls": 1,
+          "phase": "forward",
+          "flops_per_element": 1,
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
+        },
+        {
+          "name": "z_loss.layer_mean_gradient",
+          "kind": "audited_scalar",
+          "operation": "divide",
+          "elements": 1,
+          "calls": 12,
+          "phase": "backward",
+          "flops_per_element": 1,
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
+        },
+        {
+          "name": "z_loss.token_mean_gradient",
+          "kind": "audited_scalar",
+          "operation": "divide",
+          "elements": 8192,
+          "calls": 12,
+          "phase": "backward",
+          "flops_per_element": 1,
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
+        },
+        {
+          "name": "z_loss.square_gradient",
+          "kind": "multiply",
+          "elements": 16384,
+          "calls": 12,
+          "phase": "backward"
+        },
+        {
+          "name": "z_loss.logsumexp.gradient_subtract",
+          "kind": "subtract",
+          "elements": 196608,
+          "calls": 12,
+          "phase": "backward"
+        },
+        {
+          "name": "z_loss.logsumexp.gradient_exp",
+          "kind": "audited_scalar",
+          "operation": "exp",
+          "elements": 196608,
+          "calls": 12,
+          "phase": "backward",
+          "flops_per_element": 1,
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
+        },
+        {
+          "name": "z_loss.logsumexp.gradient_product",
+          "kind": "multiply",
+          "elements": 196608,
+          "calls": 12,
+          "phase": "backward"
+        },
+        {
+          "name": "z_loss.router_gradient_merge",
+          "kind": "add",
+          "elements": 196608,
+          "calls": 12,
+          "phase": "backward"
+        },
+        {
+          "name": "z_loss.loss_coefficient",
+          "kind": "multiply",
+          "elements": 1,
+          "calls": 1,
+          "phase": "forward"
+        },
+        {
+          "name": "z_loss.loss_add",
+          "kind": "add",
+          "elements": 1,
+          "calls": 1,
+          "phase": "forward"
+        },
+        {
+          "name": "z_loss.loss_coefficient_gradient",
           "kind": "multiply",
           "elements": 1,
           "calls": 1,
@@ -449,13 +610,14 @@
         "attention_core": 463856467968,
         "active_expert_projections": 1043677052928,
         "lm_head": 463856467968,
-        "router_supplement": 5972362385
+        "router_supplement": 5989467308
       },
       "scalar_costs": {
         "exp": 1,
+        "log": 1,
         "divide": 1
       },
-      "scalar_costs_status": "Explicit convention; the supplied rules do not assign exp/divide weights",
+      "scalar_costs_status": "Explicit convention; the supplied rules do not assign exp/log/divide weights",
       "non_flop_operations": [
         "top-k comparisons",
         "integer routing counts",
@@ -473,18 +635,19 @@
       "sources": [
         "https://github.com/huggingface/transformers/blob/v5.18.0/src/transformers/models/qwen3_moe/modeling_qwen3_moe.py",
         "https://github.com/pytorch/pytorch/blob/v2.6.0/torch/csrc/autograd/FunctionsManual.cpp",
-        "training/src/qwen3_moe_training.py:AccumulatedRouterBalance"
+        "training/src/qwen3_moe_training.py:AccumulatedRouterBalance",
+        "training/src/qwen3_moe_training.py:router_z_loss"
       ]
     },
     "4096": {
-      "protocol": "scicomp26-megatron-qwen3-moe-router-v1",
-      "estimated_total": 2673147053201,
+      "protocol": "scicomp26-megatron-qwen3-moe-router-zloss-v2",
+      "estimated_total": 2673164158124,
       "attention_core_and_elementwise": 927712935936,
       "reference_matched": true,
       "router_graph_audited": true,
       "official_ledger": false,
       "reference_function_sha256": "4d6e6daf89926f83f4e5009f337540cf1f16850e1b18d9b1c6cb6fb74b93fc97",
-      "counter_code_sha256": "be70b6f5fe3c40e634f0ea611feeb6a37c2351521b6e6f65608d4ec24dfd3f40",
+      "counter_code_sha256": "9f6927689b03aaba3f855b4703408d9f34a45793a7e8a6f1fd68e875744f218c",
       "reference_source": "https://github.com/NVIDIA/Megatron-LM/blob/main/megatron/training/training.py",
       "megatron_reference_total": 2667174690816,
       "megatron_components": {
@@ -494,8 +657,8 @@
         "lm_head": 463856467968
       },
       "router_projection_gemm": 5435817984,
-      "router_forward": 1984267107,
-      "router_backward": 3988095278,
+      "router_forward": 1991639921,
+      "router_backward": 3997827387,
       "router_operations": [
         {
           "kind": "matmul",
@@ -539,7 +702,7 @@
           "calls": 12,
           "phase": "forward",
           "flops_per_element": 1,
-          "counting_basis": "Declared exp/divide cost 1; not specified by supplied rule"
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
         },
         {
           "name": "router.softmax.sum",
@@ -556,7 +719,7 @@
           "calls": 12,
           "phase": "forward",
           "flops_per_element": 1,
-          "counting_basis": "Declared exp/divide cost 1; not specified by supplied rule"
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
         },
         {
           "name": "router.softmax.gradient_product",
@@ -594,7 +757,7 @@
           "calls": 12,
           "phase": "forward",
           "flops_per_element": 1,
-          "counting_basis": "Declared exp/divide cost 1; not specified by supplied rule"
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
         },
         {
           "name": "auxiliary.softmax.sum",
@@ -611,7 +774,7 @@
           "calls": 12,
           "phase": "forward",
           "flops_per_element": 1,
-          "counting_basis": "Declared exp/divide cost 1; not specified by supplied rule"
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
         },
         {
           "name": "auxiliary.softmax.gradient_product",
@@ -649,7 +812,7 @@
           "calls": 12,
           "phase": "forward",
           "flops_per_element": 1,
-          "counting_basis": "Declared exp/divide cost 1; not specified by supplied rule"
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
         },
         {
           "name": "topk_normalize.gradient_divisions",
@@ -659,7 +822,7 @@
           "calls": 12,
           "phase": "backward",
           "flops_per_element": 1,
-          "counting_basis": "Declared exp/divide cost 1; not specified by supplied rule"
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
         },
         {
           "name": "topk_normalize.gradient_negate",
@@ -746,7 +909,7 @@
           "calls": 12,
           "phase": "forward",
           "flops_per_element": 1,
-          "counting_basis": "Declared exp/divide cost 1; not specified by supplied rule"
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
         },
         {
           "name": "auxiliary.frequency_divide",
@@ -756,7 +919,7 @@
           "calls": 12,
           "phase": "forward",
           "flops_per_element": 1,
-          "counting_basis": "Declared exp/divide cost 1; not specified by supplied rule"
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
         },
         {
           "name": "auxiliary.frequency_probability_product",
@@ -787,7 +950,7 @@
           "calls": 1,
           "phase": "forward",
           "flops_per_element": 1,
-          "counting_basis": "Declared exp/divide cost 1; not specified by supplied rule"
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
         },
         {
           "name": "auxiliary.expert_scale",
@@ -811,7 +974,7 @@
           "calls": 12,
           "phase": "backward",
           "flops_per_element": 1,
-          "counting_basis": "Declared exp/divide cost 1; not specified by supplied rule"
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
         },
         {
           "name": "auxiliary.probability_gradient_product",
@@ -828,7 +991,7 @@
           "calls": 12,
           "phase": "backward",
           "flops_per_element": 1,
-          "counting_basis": "Declared exp/divide cost 1; not specified by supplied rule"
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
         },
         {
           "name": "auxiliary.router_gradient_merge",
@@ -853,6 +1016,167 @@
         },
         {
           "name": "auxiliary.loss_coefficient_gradient",
+          "kind": "multiply",
+          "elements": 1,
+          "calls": 1,
+          "phase": "backward"
+        },
+        {
+          "name": "z_loss.logsumexp.subtract_max",
+          "kind": "subtract",
+          "elements": 196608,
+          "calls": 12,
+          "phase": "forward"
+        },
+        {
+          "name": "z_loss.logsumexp.exp",
+          "kind": "audited_scalar",
+          "operation": "exp",
+          "elements": 196608,
+          "calls": 12,
+          "phase": "forward",
+          "flops_per_element": 1,
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
+        },
+        {
+          "name": "z_loss.logsumexp.sum",
+          "kind": "add",
+          "elements": 188416,
+          "calls": 12,
+          "phase": "forward"
+        },
+        {
+          "name": "z_loss.logsumexp.log",
+          "kind": "audited_scalar",
+          "operation": "log",
+          "elements": 8192,
+          "calls": 12,
+          "phase": "forward",
+          "flops_per_element": 1,
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
+        },
+        {
+          "name": "z_loss.logsumexp.restore_max",
+          "kind": "add",
+          "elements": 8192,
+          "calls": 12,
+          "phase": "forward"
+        },
+        {
+          "name": "z_loss.square",
+          "kind": "multiply",
+          "elements": 8192,
+          "calls": 12,
+          "phase": "forward"
+        },
+        {
+          "name": "z_loss.token_mean_sum",
+          "kind": "add",
+          "elements": 8191,
+          "calls": 12,
+          "phase": "forward"
+        },
+        {
+          "name": "z_loss.token_mean_divide",
+          "kind": "audited_scalar",
+          "operation": "divide",
+          "elements": 1,
+          "calls": 12,
+          "phase": "forward",
+          "flops_per_element": 1,
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
+        },
+        {
+          "name": "z_loss.layer_mean_sum",
+          "kind": "add",
+          "elements": 11,
+          "calls": 1,
+          "phase": "forward"
+        },
+        {
+          "name": "z_loss.layer_mean_divide",
+          "kind": "audited_scalar",
+          "operation": "divide",
+          "elements": 1,
+          "calls": 1,
+          "phase": "forward",
+          "flops_per_element": 1,
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
+        },
+        {
+          "name": "z_loss.layer_mean_gradient",
+          "kind": "audited_scalar",
+          "operation": "divide",
+          "elements": 1,
+          "calls": 12,
+          "phase": "backward",
+          "flops_per_element": 1,
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
+        },
+        {
+          "name": "z_loss.token_mean_gradient",
+          "kind": "audited_scalar",
+          "operation": "divide",
+          "elements": 8192,
+          "calls": 12,
+          "phase": "backward",
+          "flops_per_element": 1,
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
+        },
+        {
+          "name": "z_loss.square_gradient",
+          "kind": "multiply",
+          "elements": 16384,
+          "calls": 12,
+          "phase": "backward"
+        },
+        {
+          "name": "z_loss.logsumexp.gradient_subtract",
+          "kind": "subtract",
+          "elements": 196608,
+          "calls": 12,
+          "phase": "backward"
+        },
+        {
+          "name": "z_loss.logsumexp.gradient_exp",
+          "kind": "audited_scalar",
+          "operation": "exp",
+          "elements": 196608,
+          "calls": 12,
+          "phase": "backward",
+          "flops_per_element": 1,
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
+        },
+        {
+          "name": "z_loss.logsumexp.gradient_product",
+          "kind": "multiply",
+          "elements": 196608,
+          "calls": 12,
+          "phase": "backward"
+        },
+        {
+          "name": "z_loss.router_gradient_merge",
+          "kind": "add",
+          "elements": 196608,
+          "calls": 12,
+          "phase": "backward"
+        },
+        {
+          "name": "z_loss.loss_coefficient",
+          "kind": "multiply",
+          "elements": 1,
+          "calls": 1,
+          "phase": "forward"
+        },
+        {
+          "name": "z_loss.loss_add",
+          "kind": "add",
+          "elements": 1,
+          "calls": 1,
+          "phase": "forward"
+        },
+        {
+          "name": "z_loss.loss_coefficient_gradient",
           "kind": "multiply",
           "elements": 1,
           "calls": 1,
@@ -864,13 +1188,14 @@
         "attention_core": 927712935936,
         "active_expert_projections": 1043677052928,
         "lm_head": 463856467968,
-        "router_supplement": 5972362385
+        "router_supplement": 5989467308
       },
       "scalar_costs": {
         "exp": 1,
+        "log": 1,
         "divide": 1
       },
-      "scalar_costs_status": "Explicit convention; the supplied rules do not assign exp/divide weights",
+      "scalar_costs_status": "Explicit convention; the supplied rules do not assign exp/log/divide weights",
       "non_flop_operations": [
         "top-k comparisons",
         "integer routing counts",
@@ -888,18 +1213,19 @@
       "sources": [
         "https://github.com/huggingface/transformers/blob/v5.18.0/src/transformers/models/qwen3_moe/modeling_qwen3_moe.py",
         "https://github.com/pytorch/pytorch/blob/v2.6.0/torch/csrc/autograd/FunctionsManual.cpp",
-        "training/src/qwen3_moe_training.py:AccumulatedRouterBalance"
+        "training/src/qwen3_moe_training.py:AccumulatedRouterBalance",
+        "training/src/qwen3_moe_training.py:router_z_loss"
       ]
     },
     "8192": {
-      "protocol": "scicomp26-megatron-qwen3-moe-router-v1",
-      "estimated_total": 3600859989137,
+      "protocol": "scicomp26-megatron-qwen3-moe-router-zloss-v2",
+      "estimated_total": 3600877094060,
       "attention_core_and_elementwise": 1855425871872,
       "reference_matched": true,
       "router_graph_audited": true,
       "official_ledger": false,
       "reference_function_sha256": "4d6e6daf89926f83f4e5009f337540cf1f16850e1b18d9b1c6cb6fb74b93fc97",
-      "counter_code_sha256": "be70b6f5fe3c40e634f0ea611feeb6a37c2351521b6e6f65608d4ec24dfd3f40",
+      "counter_code_sha256": "9f6927689b03aaba3f855b4703408d9f34a45793a7e8a6f1fd68e875744f218c",
       "reference_source": "https://github.com/NVIDIA/Megatron-LM/blob/main/megatron/training/training.py",
       "megatron_reference_total": 3594887626752,
       "megatron_components": {
@@ -909,8 +1235,8 @@
         "lm_head": 463856467968
       },
       "router_projection_gemm": 5435817984,
-      "router_forward": 1984267107,
-      "router_backward": 3988095278,
+      "router_forward": 1991639921,
+      "router_backward": 3997827387,
       "router_operations": [
         {
           "kind": "matmul",
@@ -954,7 +1280,7 @@
           "calls": 12,
           "phase": "forward",
           "flops_per_element": 1,
-          "counting_basis": "Declared exp/divide cost 1; not specified by supplied rule"
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
         },
         {
           "name": "router.softmax.sum",
@@ -971,7 +1297,7 @@
           "calls": 12,
           "phase": "forward",
           "flops_per_element": 1,
-          "counting_basis": "Declared exp/divide cost 1; not specified by supplied rule"
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
         },
         {
           "name": "router.softmax.gradient_product",
@@ -1009,7 +1335,7 @@
           "calls": 12,
           "phase": "forward",
           "flops_per_element": 1,
-          "counting_basis": "Declared exp/divide cost 1; not specified by supplied rule"
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
         },
         {
           "name": "auxiliary.softmax.sum",
@@ -1026,7 +1352,7 @@
           "calls": 12,
           "phase": "forward",
           "flops_per_element": 1,
-          "counting_basis": "Declared exp/divide cost 1; not specified by supplied rule"
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
         },
         {
           "name": "auxiliary.softmax.gradient_product",
@@ -1064,7 +1390,7 @@
           "calls": 12,
           "phase": "forward",
           "flops_per_element": 1,
-          "counting_basis": "Declared exp/divide cost 1; not specified by supplied rule"
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
         },
         {
           "name": "topk_normalize.gradient_divisions",
@@ -1074,7 +1400,7 @@
           "calls": 12,
           "phase": "backward",
           "flops_per_element": 1,
-          "counting_basis": "Declared exp/divide cost 1; not specified by supplied rule"
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
         },
         {
           "name": "topk_normalize.gradient_negate",
@@ -1161,7 +1487,7 @@
           "calls": 12,
           "phase": "forward",
           "flops_per_element": 1,
-          "counting_basis": "Declared exp/divide cost 1; not specified by supplied rule"
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
         },
         {
           "name": "auxiliary.frequency_divide",
@@ -1171,7 +1497,7 @@
           "calls": 12,
           "phase": "forward",
           "flops_per_element": 1,
-          "counting_basis": "Declared exp/divide cost 1; not specified by supplied rule"
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
         },
         {
           "name": "auxiliary.frequency_probability_product",
@@ -1202,7 +1528,7 @@
           "calls": 1,
           "phase": "forward",
           "flops_per_element": 1,
-          "counting_basis": "Declared exp/divide cost 1; not specified by supplied rule"
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
         },
         {
           "name": "auxiliary.expert_scale",
@@ -1226,7 +1552,7 @@
           "calls": 12,
           "phase": "backward",
           "flops_per_element": 1,
-          "counting_basis": "Declared exp/divide cost 1; not specified by supplied rule"
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
         },
         {
           "name": "auxiliary.probability_gradient_product",
@@ -1243,7 +1569,7 @@
           "calls": 12,
           "phase": "backward",
           "flops_per_element": 1,
-          "counting_basis": "Declared exp/divide cost 1; not specified by supplied rule"
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
         },
         {
           "name": "auxiliary.router_gradient_merge",
@@ -1272,6 +1598,167 @@
           "elements": 1,
           "calls": 1,
           "phase": "backward"
+        },
+        {
+          "name": "z_loss.logsumexp.subtract_max",
+          "kind": "subtract",
+          "elements": 196608,
+          "calls": 12,
+          "phase": "forward"
+        },
+        {
+          "name": "z_loss.logsumexp.exp",
+          "kind": "audited_scalar",
+          "operation": "exp",
+          "elements": 196608,
+          "calls": 12,
+          "phase": "forward",
+          "flops_per_element": 1,
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
+        },
+        {
+          "name": "z_loss.logsumexp.sum",
+          "kind": "add",
+          "elements": 188416,
+          "calls": 12,
+          "phase": "forward"
+        },
+        {
+          "name": "z_loss.logsumexp.log",
+          "kind": "audited_scalar",
+          "operation": "log",
+          "elements": 8192,
+          "calls": 12,
+          "phase": "forward",
+          "flops_per_element": 1,
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
+        },
+        {
+          "name": "z_loss.logsumexp.restore_max",
+          "kind": "add",
+          "elements": 8192,
+          "calls": 12,
+          "phase": "forward"
+        },
+        {
+          "name": "z_loss.square",
+          "kind": "multiply",
+          "elements": 8192,
+          "calls": 12,
+          "phase": "forward"
+        },
+        {
+          "name": "z_loss.token_mean_sum",
+          "kind": "add",
+          "elements": 8191,
+          "calls": 12,
+          "phase": "forward"
+        },
+        {
+          "name": "z_loss.token_mean_divide",
+          "kind": "audited_scalar",
+          "operation": "divide",
+          "elements": 1,
+          "calls": 12,
+          "phase": "forward",
+          "flops_per_element": 1,
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
+        },
+        {
+          "name": "z_loss.layer_mean_sum",
+          "kind": "add",
+          "elements": 11,
+          "calls": 1,
+          "phase": "forward"
+        },
+        {
+          "name": "z_loss.layer_mean_divide",
+          "kind": "audited_scalar",
+          "operation": "divide",
+          "elements": 1,
+          "calls": 1,
+          "phase": "forward",
+          "flops_per_element": 1,
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
+        },
+        {
+          "name": "z_loss.layer_mean_gradient",
+          "kind": "audited_scalar",
+          "operation": "divide",
+          "elements": 1,
+          "calls": 12,
+          "phase": "backward",
+          "flops_per_element": 1,
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
+        },
+        {
+          "name": "z_loss.token_mean_gradient",
+          "kind": "audited_scalar",
+          "operation": "divide",
+          "elements": 8192,
+          "calls": 12,
+          "phase": "backward",
+          "flops_per_element": 1,
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
+        },
+        {
+          "name": "z_loss.square_gradient",
+          "kind": "multiply",
+          "elements": 16384,
+          "calls": 12,
+          "phase": "backward"
+        },
+        {
+          "name": "z_loss.logsumexp.gradient_subtract",
+          "kind": "subtract",
+          "elements": 196608,
+          "calls": 12,
+          "phase": "backward"
+        },
+        {
+          "name": "z_loss.logsumexp.gradient_exp",
+          "kind": "audited_scalar",
+          "operation": "exp",
+          "elements": 196608,
+          "calls": 12,
+          "phase": "backward",
+          "flops_per_element": 1,
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
+        },
+        {
+          "name": "z_loss.logsumexp.gradient_product",
+          "kind": "multiply",
+          "elements": 196608,
+          "calls": 12,
+          "phase": "backward"
+        },
+        {
+          "name": "z_loss.router_gradient_merge",
+          "kind": "add",
+          "elements": 196608,
+          "calls": 12,
+          "phase": "backward"
+        },
+        {
+          "name": "z_loss.loss_coefficient",
+          "kind": "multiply",
+          "elements": 1,
+          "calls": 1,
+          "phase": "forward"
+        },
+        {
+          "name": "z_loss.loss_add",
+          "kind": "add",
+          "elements": 1,
+          "calls": 1,
+          "phase": "forward"
+        },
+        {
+          "name": "z_loss.loss_coefficient_gradient",
+          "kind": "multiply",
+          "elements": 1,
+          "calls": 1,
+          "phase": "backward"
         }
       ],
       "components": {
@@ -1279,13 +1766,14 @@
         "attention_core": 1855425871872,
         "active_expert_projections": 1043677052928,
         "lm_head": 463856467968,
-        "router_supplement": 5972362385
+        "router_supplement": 5989467308
       },
       "scalar_costs": {
         "exp": 1,
+        "log": 1,
         "divide": 1
       },
-      "scalar_costs_status": "Explicit convention; the supplied rules do not assign exp/divide weights",
+      "scalar_costs_status": "Explicit convention; the supplied rules do not assign exp/log/divide weights",
       "non_flop_operations": [
         "top-k comparisons",
         "integer routing counts",
@@ -1303,7 +1791,8 @@
       "sources": [
         "https://github.com/huggingface/transformers/blob/v5.18.0/src/transformers/models/qwen3_moe/modeling_qwen3_moe.py",
         "https://github.com/pytorch/pytorch/blob/v2.6.0/torch/csrc/autograd/FunctionsManual.cpp",
-        "training/src/qwen3_moe_training.py:AccumulatedRouterBalance"
+        "training/src/qwen3_moe_training.py:AccumulatedRouterBalance",
+        "training/src/qwen3_moe_training.py:router_z_loss"
       ]
     }
   },
@@ -1319,9 +1808,9 @@
       "first_step": 1,
       "last_step": 3536,
       "steps": 3536,
-      "flops_per_update": 141394597454912,
-      "flops": 499971296600568832,
-      "cumulative_flops": 499971296600568832
+      "flops_per_update": 141395692169984,
+      "flops": 499975167513063424,
+      "cumulative_flops": 499975167513063424
     },
     {
       "stage": "medium",
@@ -1334,9 +1823,9 @@
       "first_step": 3537,
       "last_step": 4705,
       "steps": 1169,
-      "flops_per_update": 171081411404864,
-      "flops": 199994169932286016,
-      "cumulative_flops": 699965466532854848
+      "flops_per_update": 171082506119936,
+      "flops": 199995449654205184,
+      "cumulative_flops": 699970617167268608
     },
     {
       "stage": "full",
@@ -1349,9 +1838,9 @@
       "first_step": 4706,
       "last_step": 6006,
       "steps": 1301,
-      "flops_per_update": 230455039304768,
-      "flops": 299822006135503168,
-      "cumulative_flops": 999787472668358016
+      "flops_per_update": 230456134019840,
+      "flops": 299823430359811840,
+      "cumulative_flops": 999794047527080448
     }
   ]
 }

@@ -69,6 +69,6 @@ CUDA_VISIBLE_DEVICES= "$python_bin" "$root/training/export_hf.py" \
     2>&1 | tee "$output/export.log"
 
 CUDA_VISIBLE_DEVICES="$eval_gpu" NPROC_PER_NODE=1 BATCH_SIZE="${EVAL_BATCH_SIZE:-32}" \
-    SEQUENCE_LENGTH=8192 FUSION_MODE=none \
+    SEQUENCE_LENGTH=8192 FUSION_MODE="${EVAL_FUSION_MODE:-none}" \
     bash "$root/evaluation/eval.sh" "$eval_cache" "$output/hf-model" "$output/eval-result.json" \
     2>&1 | tee "$output/eval.log"

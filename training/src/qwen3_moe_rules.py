@@ -39,7 +39,7 @@ def architecture_for_hidden(hidden, family):
         num_attention_heads=hidden // 64, num_key_value_heads=2, head_dim=64,
         intermediate_size=4 * hidden, moe_intermediate_size=4 * hidden // top_k,
         num_experts=top_k, num_experts_per_tok=top_k,
-        router_aux_loss_coef=0.001,
+        router_aux_loss_coef=0.001, router_z_loss_coef=0.001,
     )
     maximum = maximum_expert_count(config)
     count = int(maximum * Fraction(str(family["expert_capacity_fraction"])))
@@ -85,6 +85,7 @@ def make_family(granularity_shift=0, expert_capacity_fraction=1.0, expert_alignm
         },
         "transformers_version": "5.18.0",
         "model_code_sha256": hashlib.sha256((ROOT / "training/src/qwen3_moe_training.py").read_bytes()).hexdigest(),
+        "acceleration_code_sha256": hashlib.sha256((ROOT / "training/src/h800_acceleration.py").read_bytes()).hexdigest(),
         "base_config_sha256": hashlib.sha256((ROOT / "qwen3_moe_a20m/config.json").read_bytes()).hexdigest(),
         "generation_code_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
     }

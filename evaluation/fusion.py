@@ -1,4 +1,4 @@
-"""Inference-only FFN and RMSNorm fusion for exported HF Hybrid models."""
+"""Inference-only fusion for exported HF Hybrid and Qwen3 MoE models."""
 
 from types import MethodType
 
@@ -13,11 +13,13 @@ def _fused_mlp_forward(self, hidden_states):
 
 
 def _fused_rms_forward(self, hidden_states):
+    if (not hidden_states.is_cuda or hidden_states.stride(-1) != 1
+            or torch.is_grad_enabled()):
+        return self._fusion_original_forward(hidden_states)
     from fusion_kernels import fused_rms_norm
 
-    if not hidden_states.is_cuda or hidden_states.stride(-1) != 1:
-        return self._fusion_original_forward(hidden_states)
-    return fused_rms_norm(hidden_states, self.weight, self.variance_epsilon)
+    return fused_rms_norm(hidden_states, self.weight, self.variance_epsilon,
+                          cast_before_weight=type(self).__name__ == "Qwen3MoeRMSNorm")
 
 
 def _validate_linear_parts(parts):
@@ -47,11 +49,22 @@ def _packed_linear(parts):
 
 def install_operator_fusion(model, mode="ffn_rmsnorm"):
     """Install fusion after loading an HF checkpoint and before evaluation."""
-    if mode not in ("none", "ffn_rmsnorm"):
+    if mode not in ("none", "rmsnorm", "ffn_rmsnorm"):
         raise ValueError(f"Unknown fusion mode: {mode}")
     if mode == "none":
         return {"mode": mode, "packed_gate_up": 0, "rms_norm": 0}
     expected = int(getattr(model.config, "num_hidden_layers", 0))
+    if mode == "rmsnorm" and getattr(model.config, "model_type", None) == "qwen3_moe":
+        norms = [m for m in model.modules() if type(m).__name__ == "Qwen3MoeRMSNorm"]
+        # Two decoder norms, final norm, and per-layer Q/K head norms.
+        if len(norms) != 4 * expected + 1 or expected < 1:
+            raise ValueError("Unexpected Qwen3 MoE RMSNorm topology")
+        for module in norms:
+            if hasattr(module, "_fusion_original_forward"):
+                raise ValueError("RMSNorm fusion already installed")
+            module._fusion_original_forward = module.forward
+            module.forward = MethodType(_fused_rms_forward, module)
+        return {"mode": mode, "packed_gate_up": 0, "rms_norm": len(norms)}
     if getattr(model.config, "model_type", None) != "scicomp26_olmo_hybrid" or expected < 1:
         raise ValueError("Fusion only supports the submission Hybrid HF exports")
     modules = [module for module in model.modules() if type(module).__name__ == "OlmoHybridMLP"]
@@ -74,7 +87,7 @@ def install_operator_fusion(model, mode="ffn_rmsnorm"):
 
     before = sum(parameter.numel() for parameter in model.parameters())
     with torch.no_grad():
-        for module in modules:
+        for module in (modules if mode == "ffn_rmsnorm" else []):
             gate, up = module.gate_proj, module.up_proj
             module._fusion_gate_up = _packed_linear((gate, up))
             module.gate_proj = nn.Identity()
@@ -86,4 +99,5 @@ def install_operator_fusion(model, mode="ffn_rmsnorm"):
     after = sum(parameter.numel() for parameter in model.parameters())
     if after != before:
         raise RuntimeError(f"Fusion changed parameter count: {before} -> {after}")
-    return {"mode": mode, "packed_gate_up": len(modules), "rms_norm": len(norms)}
+    return {"mode": mode, "packed_gate_up": len(modules) if mode == "ffn_rmsnorm" else 0,
+            "rms_norm": len(norms)}

@@ -36,6 +36,7 @@ model:
     bos_token_id: 1
     eos_token_id: 2
     pad_token_id: 3
+    router_z_loss_coef: 0.001
 training:
   dtype: bfloat16
   max_steps: 8716
@@ -50,10 +51,10 @@ training:
     reference:
       context_length: 8192
       max_steps: 6155
-      planned_training_flops: 299986424972390880
+      planned_training_flops: 299988670963010560
       planned_training_tokens: 1613496320
-      flops_per_token_numerator: 1523082986253
-      flops_per_token_denominator: 8192
+      flops_per_token_numerator: 47596699673
+      flops_per_token_denominator: 256
       warmup_steps: 123
       cooldown_steps: 1231
       final_lr_ratio: 0.0
@@ -68,9 +69,9 @@ training:
       first_step: 1
       last_step: 5181
       steps: 5181
-      flops_per_update: 28947446260128
-      flops: 149976719073723168
-      cumulative_flops: 149976719073723168
+      flops_per_update: 28947811165184
+      flops: 149978609646818304
+      cumulative_flops: 149978609646818304
     - stage: medium
       stage_index: 1
       length: 4096
@@ -81,9 +82,9 @@ training:
       first_step: 5182
       last_step: 6869
       steps: 1688
-      flops_per_update: 35544516026784
-      flops: 59999143053211392
-      cumulative_flops: 209975862126934560
+      flops_per_update: 35544880931840
+      flops: 59999759012945920
+      cumulative_flops: 209978368659764224
     - stage: full
       stage_index: 2
       length: 8192
@@ -94,26 +95,32 @@ training:
       first_step: 6870
       last_step: 8716
       steps: 1847
-      flops_per_update: 48738655560096
-      flops: 90020296819497312
-      cumulative_flops: 299996158946431872
+      flops_per_update: 48739020465152
+      flops: 90020970799135744
+      cumulative_flops: 299999339458899968
     max_steps: 8716
-    planned_training_flops: 299996158946431872
+    planned_training_flops: 299999339458899968
     planned_training_tokens: 2284847104
-    unused_reference_flops: 3841053568128
+    unused_reference_flops: 660541100032
     accounting:
-      kind: scicomp26-megatron-qwen3-moe-router-v1
+      kind: scicomp26-megatron-qwen3-moe-router-zloss-v2
       official_ledger: false
       reference_matched: true
       router_graph_audited: true
       scalar_costs:
         exp: 1
+        log: 1
         divide: 1
-      limitations: Megatron reference plus source-derived routing/auxiliary-loss arithmetic.
-        Exp/divide cost 1 is an explicit convention, not specified by the supplied
-        rule. Ordinary Transformer elementwise/LM-loss terms follow reference exclusions;
-        optimizer, recomputation and communication are excluded. Not organizer certification.
+      limitations: Megatron reference plus source-derived routing/auxiliary/Z-loss
+        arithmetic. Exp/log/divide cost 1 is an explicit convention, not specified
+        by the supplied rule. Ordinary Transformer elementwise/LM-loss terms follow
+        reference exclusions; optimizer, recomputation and communication are excluded.
+        Not organizer certification.
   fp32_master_weights: true
+  h800_acceleration:
+    experts: auto
+    attention: auto
+    compile_swiglu: true
 optimizer:
   name: soap
   learning_rate: 0.003
@@ -137,14 +144,14 @@ data:
 scaling:
   expected_total_parameters: 89707776
   tokens_per_update: 262144
-  flops_accounting: scicomp26-megatron-qwen3-moe-router-v1
+  flops_accounting: scicomp26-megatron-qwen3-moe-router-zloss-v2
 budget:
   total_training_flops: 300000000000000000
-  planned_training_flops: 299996158946431872
+  planned_training_flops: 299999339458899968
   planned_training_tokens: 2284847104
-  flops_per_token_numerator: 1523082986253
-  flops_per_token_denominator: 8192
-  flops_protocol: scicomp26-megatron-qwen3-moe-router-v1
+  flops_per_token_numerator: 47596699673
+  flops_per_token_denominator: 256
+  flops_protocol: scicomp26-megatron-qwen3-moe-router-zloss-v2
   flops_per_token_basis: 8192-token reference; use curriculum stage costs at runtime
 submission:
   budget_tier: 3e17
@@ -198,7 +205,8 @@ architecture_family:
       K follows the declared size rule
     shared_experts: 0
   transformers_version: 5.18.0
-  model_code_sha256: 738839f808754853ffaccc810ffa07704c68778756ff0617fe0b541b0c8d61cd
+  model_code_sha256: 4f197b68ed8472a0d5d2916a729559edb20c849c5b40597c0e1a24b7279d126c
+  acceleration_code_sha256: 01dcda5c103712beaed1dc5e1ed7809549989e7319c25b9b4e290eea29d128f1
   base_config_sha256: 4bc0edba5da131c13990e9da2a3dc970726a3c21eb8a24aee747dad824daeec7
-  generation_code_sha256: dbe6a2ba00cc314ff299a6e67e3a232342a15caffbe2550f551de2ebab572ec6
-  family_id: 04d2c5476fd93849511136830a4410ca95d83c3ce620f9dc6375dd7182ceb305
+  generation_code_sha256: 12355112c4d291e50b277282a2cc2801023cc577990b8a3dfcac32d10b18424b
+  family_id: 148f42b962720776269df7565e0c435aa4f96601c9d41dd576b4d759da37f433

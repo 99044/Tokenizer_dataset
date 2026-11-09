@@ -10,12 +10,15 @@ import argparse
 import json
 import math
 import os
+import sys
 import tempfile
 import time
 from itertools import islice
 from pathlib import Path
 
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "training/src"))
 
 
 def pack_jsonl(dataset_path, tokenizer, cache_dir):
@@ -122,8 +125,8 @@ def parse_args(argv=None):
     parser.add_argument("--batch-size", type=int, default=32, help="Sequences per GPU")
     parser.add_argument("--sequence-length", type=int, default=8192)
     parser.add_argument(
-        "--fusion", choices=("none", "ffn_rmsnorm"), default="ffn_rmsnorm",
-        help="none=BF16 baseline, ffn_rmsnorm=FFN and RMSNorm fusion",
+        "--fusion", choices=("none", "rmsnorm", "ffn_rmsnorm"), default="ffn_rmsnorm",
+        help="none=BF16 baseline, rmsnorm=RMSNorm only, ffn_rmsnorm=Hybrid FFN and RMSNorm",
     )
     parser.add_argument("--output", type=Path, default=Path("result.json"))
     args = parser.parse_args(argv)
@@ -192,8 +195,15 @@ def main():
     if loading_info.get("missing_keys") or loading_info.get("mismatched_keys"):
         raise RuntimeError(f"Checkpoint did not fully initialize the language model: {loading_info}")
     model.to(device).eval()
-    if config.model_type == "qwen3_moe" and args.fusion != "none":
-        raise ValueError("Qwen3 MoE evaluation requires --fusion none")
+    acceleration_info = None
+    if config.model_type == "qwen3_moe":
+        if args.fusion not in {"none", "rmsnorm"}:
+            raise ValueError("Qwen3 MoE supports --fusion none or rmsnorm")
+        from h800_acceleration import install_h800_acceleration
+
+        acceleration_info = install_h800_acceleration(model)
+        if rank == 0:
+            print(f"H800 acceleration: {acceleration_info}", flush=True)
     from fusion import install_operator_fusion
     fusion_info = install_operator_fusion(model, mode=args.fusion)
     if rank == 0:
@@ -216,6 +226,11 @@ def main():
     def forward_only(inputs):
         # Right padding follows every valid target, so it cannot affect causal predictions.
         # Fresh state on every call; no labels means model.forward does not compute loss.
+        if config.model_type == "qwen3_moe" and model.config._attn_implementation == "sdpa":
+            from torch.nn.attention import SDPBackend, sdpa_kernel
+
+            with sdpa_kernel(SDPBackend.FLASH_ATTENTION):
+                return model(input_ids=inputs, use_cache=False, return_dict=True).logits
         return model(input_ids=inputs, use_cache=False, return_dict=True).logits
 
     total_nll = torch.zeros((), device=device, dtype=torch.float64)
@@ -286,7 +301,7 @@ def main():
             batch_size_per_gpu=args.batch_size,
             distributed_world_size=dist.get_world_size(),
             sequence_length=args.sequence_length,
-            fusion=fusion_info, active_parameters=active_params,
+            fusion=fusion_info, acceleration=acceleration_info, active_parameters=active_params,
             forward_seconds=forward_seconds,
             scored_tokens=count_tensor.item(),
             data_source=data_source,

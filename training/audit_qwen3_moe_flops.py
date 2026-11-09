@@ -62,7 +62,7 @@ def audit(settings, metrics_path):
         "completed_optimizer_steps": rows, "actual_training_flops": total,
         "training_tokens": rows * settings["scaling"]["tokens_per_update"],
         "target_flops": target, "within_one_percent": True,
-        "scalar_costs": {"exp": 1, "divide": 1},
+        "scalar_costs": {"exp": 1, "log": 1, "divide": 1},
         "scalar_costs_status": "Explicit convention; not specified by the supplied rule",
         "limitations": "Audits the complete logged successful-update path; unlogged failed attempts cannot be inferred. Organizer review remains separate.",
     }

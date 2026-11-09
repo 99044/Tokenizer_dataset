@@ -15,6 +15,7 @@ esac
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 export TRAIN_CONFIG=${TRAIN_CONFIG:-"$root/qwen3_moe/configs/$tier/training.yaml"}
 export EVAL_BATCH_SIZE=${EVAL_BATCH_SIZE:-$default_eval_batch}
+export EVAL_FUSION_MODE=${EVAL_FUSION_MODE:-rmsnorm}
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}
 export TRITON_F32_DEFAULT=${TRITON_F32_DEFAULT:-ieee}
 PYTHONPATH="$root/training/src${PYTHONPATH:+:$PYTHONPATH}" \

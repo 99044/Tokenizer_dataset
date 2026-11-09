@@ -47,6 +47,9 @@ def make_recipe(tier, *, granularity_shift=0, expert_capacity_fraction=1.0, expe
         enforce_legacy_limits=False,
     )
     settings["architecture_family"] = family
+    settings["training"]["h800_acceleration"] = dict(
+        experts="auto", attention="auto", compile_swiglu=True,
+    )
     activation = validate_family_settings(settings)
     curriculum = settings["training"]["length_curriculum"]
     # Evaluate each stage boundary and each tenth of the final 8K stage.
@@ -85,10 +88,10 @@ def make_recipe(tier, *, granularity_shift=0, expert_capacity_fraction=1.0, expe
         "organizer_certified": False,
         "flops_utilization": curriculum["planned_training_flops"] / preset["flops"],
         "training_tokens_per_active_parameter": curriculum["planned_training_tokens"] / active,
-        "persistent_state_lower_bound_gib_per_gpu": 22 * total / 2**30,
+        "persistent_state_lower_bound_gib_per_gpu": 20 * total / 2**30,
         "memory_limitations": (
-            "22 bytes/parameter counts BF16 weights/gradients, FP32 masters/gradients, "
-            "FP32 SOAP moments and BF16 DDP buckets. Excludes SOAP preconditioners, "
+            "20 bytes/parameter counts BF16 weights, shared BF16 gradient/DDP buckets, "
+            "FP32 masters/gradients and FP32 SOAP moments. Excludes SOAP preconditioners, "
             "optimizer temporaries, activations, logits, CUDA/NCCL and allocator overhead. "
             "DDP replicates all experts on each GPU. Verify peak memory on H800 before a full run."
         ),

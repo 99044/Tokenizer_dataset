@@ -72,7 +72,12 @@ Each active FFN has combined width `4 * hidden`. The 64-dimensional attention
 heads replace the old 8/16-dimensional, 32-head presets. Larger tiers increase
 trunk capacity as well as data volume. The fixed router auxiliary coefficient
 remains 0.001 with the existing accumulated global-count approximation.
-Stock packed Qwen3 experts process every selected assignment without dropping.
+Router Z-loss also uses coefficient **0.001** in all four tiers:
+`mean_layers(mean_tokens(logsumexp(router_logits.float())**2))`.
+It is computed in FP32 and added only during training. Logs distinguish
+`train/router_z_loss`, its weighted contribution and `train/token_nll`;
+validation NLL and BPB exclude both router penalties.
+Packed Qwen3 experts process every selected assignment without dropping.
 
 SOAP with BF16 model weights, FP32 master weights, betas `(0.95, 0.95)` and
 weight decay 0.1 retains the existing training path. The LR values are local
@@ -102,7 +107,7 @@ This does not measure GPU throughput, peak memory or trained BPB.
 
 ## Competition-reference FLOPs accounting
 
-The new protocol is `scicomp26-megatron-qwen3-moe-router-v1`. It invokes the
+The new protocol is `scicomp26-megatron-qwen3-moe-router-zloss-v2`. It invokes the
 reviewed `num_floating_point_operations` snapshot directly, using MoE's
 **activated** expert count and actual sequence length/batch size. The snapshot
 and manifest are bundled under `training/src/flops_reference/`; its function
@@ -118,14 +123,15 @@ No total-parameter `6N` approximation is used.
 
 `training/src/qwen3_moe_flops.py` separately lists the routing graph's
 projection, full expert softmax, top-k renormalization, weighted merge,
-active-path gradient scatter and the runner's accumulated auxiliary loss.
+active-path gradient scatter, accumulated auxiliary loss and Router Z-loss
+(stable logsumexp, square, reductions, coefficients and backward merges).
 Its forward and backward are counted independently; the old
 `32*(experts+top_k)` proxy is gone from this protocol. Integer counts, top-k
 comparisons, indexing, copies and casts do not add floating-point arithmetic.
 Optimizer updates, activation recomputation and communication are excluded;
 precision does not change logical FLOPs.
 
-Routing exp/divide are explicitly counted as one operation per call. **Their
+Routing exp/log/divide are explicitly counted as one operation per call. **Their
 weights are not specified by the supplied rules**; this convention is recorded
 in every report and remains subject to organizer interpretation. Source-based
 local accounting is distinct from organizer certification. Actual hardware
@@ -151,6 +157,67 @@ and SOAP moments. Activations, preconditioners and optimizer temporaries are
 additional. Eight-way DDP does not divide expert storage across the cards.
 Measure a short run through all three lengths before a full training run;
 `--stop-after 1` alone only measures the 2K stage.
+
+## H800 kernels
+
+Training and evaluation select local Hopper backends automatically:
+
+* **CUTLASS grouped GEMM 0.2.0** replaces the Python loop over individual
+  experts. Sorting, counts and dispatch stay on GPU; one grouped gate/up GEMM
+  and one grouped down GEMM retain the existing packed parameters. No tokens
+  are dropped. Optional `torch.compile` fuses only the SwiGLU pointwise work,
+  including its backward; the dynamic router is not compiled as a whole.
+* **FlashAttention-3** is selected when a compatible local `flash-attn-3`
+  installation passes a BF16 causal GQA forward/backward check. Otherwise
+  attention uses the existing PyTorch SDPA FlashAttention backend. There is no
+  kernel-hub download during training. BF16 and FP32 master weights remain.
+* Qwen DDP uses **gradient bucket views**, sharing BF16 gradient/bucket storage
+  after bucket construction. The persistent-state estimate becomes 20 rather
+  than 22 bytes/parameter; this is not a peak-memory estimate.
+* Evaluation defaults to **Triton RMSNorm fusion**, including Q/K head norms.
+  It preserves Qwen's cast-before-weight multiplication and falls back to
+  stock autograd when gradients are enabled. Gate/up weights and HF state-dict
+  names are unchanged by the Qwen kernel installers.
+
+Auto modes run small numerical/gradient checks before installing native
+kernels and report the selected backends and fallback reasons. These appear
+in `train/run-plan.json` and `eval-result.json`; exact resume rejects a changed
+backend. The updated source hashes/configs require a fresh run. Mathematical
+FLOPs and parameter counts are independent of the selected kernel. BF16
+rounding/order can differ; BPB must be measured with the chosen evaluator.
+
+Install the expert extension **in the pinned training environment**, either
+from a matching Python/PyTorch/CUDA/ABI wheel or by compiling for SM90:
+
+```bash
+bash qwen3_moe/install_h800.sh /path/to/grouped_gemm-0.2.0-cp311-cp311-linux_x86_64.whl
+# Or build the pinned source with nvcc/CUDA 12.4; needs network/build tools:
+bash qwen3_moe/install_h800.sh
+
+# Run on an H800; repeat for other tiers to exercise their expert dimensions.
+python qwen3_moe/verify_h800.py --tier 3e17 --output /tmp/h800-3e17.json
+```
+
+The verifier compares stock/grouped outputs, input/weight/routing gradients,
+unused-expert zeros and fused RMSNorm; it times isolated expert forward and
+forward/backward. It does not measure full training or SOAP/DDP overhead.
+FlashAttention-3 is optional and must be installed separately for the pinned
+PyTorch/CUDA environment; see its [official Hopper instructions](https://github.com/Dao-AILab/flash-attention/tree/main/hopper).
+
+`QWEN_MOE_EXPERTS=grouped_gemm` and
+`QWEN_MOE_ATTENTION=flash_attention_3` require the requested kernels and fail
+at startup if unavailable. To reproduce the eager-expert/SDPA baseline:
+
+```bash
+QWEN_MOE_EXPERTS=eager QWEN_MOE_ATTENTION=sdpa QWEN_MOE_COMPILE_SWIGLU=0 \
+EVAL_FUSION_MODE=none bash qwen3_moe/run_all.sh 3e17 TRAIN_CACHE TOKENIZER EVAL_CACHE NEW_OUTPUT
+```
+
+The development environment has no usable GPU. CPU output/gradient and FLOPs
+checks used torch 2.8.0 and the pinned Transformers 5.18.0; the target training
+environment remains torch 2.6.0+cu124. Native SM90 kernels, throughput and peak
+memory still need verification on the H800. No speedup or BPB improvement is
+claimed yet.
 
 ## Train, export and evaluate
 
