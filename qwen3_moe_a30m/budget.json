@@ -1,0 +1,32 @@
+{
+  "total_parameters": 198125920,
+  "parameters_by_component": {
+    "attention_projections": 5603328,
+    "swiglu_projections": 179306496,
+    "rmsnorm": 10592,
+    "token_embedding": 6291456,
+    "lm_head": 6291456,
+    "router": 622592
+  },
+  "active_parameters_including_input_and_output_vocab": 30026080,
+  "active_parameters_excluding_input_and_output_vocab": 17443168,
+  "world_size": 4,
+  "micro_batch_size": 1,
+  "grad_accumulation_steps": 16,
+  "sequence_length": 8192,
+  "tokens_per_update": 524288,
+  "flops_per_microbatch": 5294477309904,
+  "flops_per_token": 646298499.7441406,
+  "flops_per_update": 338846547833856,
+  "target_flops": 300000000000000000,
+  "optimizer_updates": 885,
+  "planned_training_tokens": 463994880,
+  "estimated_training_flops": 299879194832962560,
+  "attention_core_and_elementwise_flops_per_microbatch": 4123062599376,
+  "accounting": "Logical prediction graph with the existing causal S^2/2 convention",
+  "excluded": [
+    "expert dispatch and top-k selection",
+    "language-model and router auxiliary losses",
+    "optimizer, DDP communication and activation recomputation"
+  ]
+}
