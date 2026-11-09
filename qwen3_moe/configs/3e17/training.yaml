@@ -1,5 +1,5 @@
 run:
-  name: qwen3_moe_3e17_e24_k2_soap
+  name: qwen3_moe_3e17_e24_k2_soap_adaptive_token_loss
   seed: 42
 model:
   type: qwen3_moe
@@ -121,6 +121,12 @@ training:
     experts: auto
     attention: auto
     compile_swiglu: true
+  adaptive_token_loss:
+    ema_decay: 0.99
+    prior_count: 4.0
+    warmup_steps: 290
+    ramp_steps: 290
+    max_weight_delta: 0.2
 optimizer:
   name: soap
   learning_rate: 0.003

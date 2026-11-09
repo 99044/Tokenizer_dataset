@@ -232,6 +232,14 @@ def main():
             raise ValueError('上下文课程支持从头训练或 --resume，不能使用 --branch-from')
         if has_curriculum and args.warmup_steps != settings['scheduler']['warmup_steps']:
             raise ValueError('上下文课程按配置的累计 FLOPs 调度，不能覆盖 --warmup-steps')
+        adaptive_loss = None
+        adaptive_settings = settings['training'].get('adaptive_token_loss')
+        if adaptive_settings is not None:
+            if not is_qwen_moe or args.branch_from:
+                raise ValueError('adaptive_token_loss requires a fresh Qwen3 MoE run or its own checkpoint')
+            from adaptive_token_loss import AdaptiveTokenLoss
+
+            adaptive_loss = AdaptiveTokenLoss(vocab_size, device, **adaptive_settings)
         seed = settings['run']['seed']
         torch.manual_seed(seed)
         config.init_seed = seed
@@ -367,6 +375,8 @@ def main():
             if master_weights is not None:
                 master_weights.load_state_dict(checkpoint['fp32_master'])
             scheduler.load_state_dict(checkpoint['scheduler'])
+            if adaptive_loss is not None:
+                adaptive_loss.load_state_dict(checkpoint['adaptive_token_loss'])
             start_step = int(checkpoint['step'])
             if ema is not None:
                 ema.load_state_dict(checkpoint['ema'], start_step)
@@ -535,6 +545,7 @@ def main():
                 local_aux = torch.zeros_like(local_loss) if is_qwen_moe else None
                 local_z = torch.zeros_like(local_loss) if is_qwen_moe else None
                 z_coefficient = getattr(model.lm.config, 'router_z_loss_coef', 0.0) if is_qwen_moe else 0.0
+                step_stats = adaptive_loss.new_step_stats() if adaptive_loss is not None else None
                 for micro_step in range(grad_accum_steps):
                     if gdn_guard is not None:
                         gdn_guard.set_context(step, micro_step)
@@ -545,7 +556,10 @@ def main():
                             logits = ddp(inputs)
                         else:
                             logits, router_logits = ddp(inputs, route=True)
-                        loss = F.cross_entropy(logits.float().reshape(-1, vocab_size), labels.reshape(-1))
+                        if adaptive_loss is None:
+                            loss = F.cross_entropy(logits.float().reshape(-1, vocab_size), labels.reshape(-1))
+                        else:
+                            loss = adaptive_loss.objective(logits, labels, step, step_stats)
                         if balance is not None:
                             aux = balance(router_logits)
                             loss = loss + model.lm.config.router_aux_loss_coef * aux
@@ -599,6 +613,10 @@ def main():
             scheduler.step()
             dist.all_reduce(local_loss)
             mean_loss = (local_loss / world).item()
+            adaptive_metrics = {}
+            if adaptive_loss is not None:
+                dist.all_reduce(step_stats)
+                adaptive_metrics = adaptive_loss.update(step_stats, step)
             # Dion may use auxiliary CUDA streams. Synchronize explicitly so the
             # optimizer calibration measures the complete training update.
             torch.cuda.synchronize(device)
@@ -623,8 +641,12 @@ def main():
                 mean_z = (local_z / world).item()
                 metrics['train/router_z_loss'] = mean_z
                 metrics['train/router_z_loss_weighted'] = z_coefficient * mean_z
-                metrics['train/token_nll'] = (mean_loss - model.lm.config.router_aux_loss_coef * mean_aux
-                                               - z_coefficient * mean_z)
+                ce = mean_loss - model.lm.config.router_aux_loss_coef * mean_aux - z_coefficient * mean_z
+                if adaptive_loss is None:
+                    metrics['train/token_nll'] = ce
+                else:
+                    metrics.update(adaptive_metrics)
+                    metrics['train/weighted_token_nll'] = ce
                 if rank == 0:
                     metrics.update(balance.metrics())
             for index, group in enumerate(optimizer_report['groups']):
@@ -679,6 +701,8 @@ def main():
                     )
                     if master_weights is not None:
                         checkpoint_payload['fp32_master'] = master_weights.state_dict()
+                    if adaptive_loss is not None:
+                        checkpoint_payload['adaptive_token_loss'] = adaptive_loss.state_dict()
                     if ema is not None:
                         checkpoint_payload['ema'] = ema.state_dict()
                     if stage is not None:

@@ -77,6 +77,14 @@ Router Z-loss also uses coefficient **0.001** in all four tiers:
 It is computed in FP32 and added only during training. Logs distinguish
 `train/router_z_loss`, its weighted contribution and `train/token_nll`;
 validation NLL and BPB exclude both router penalties.
+
+The 3e17 preset weights text-token CE using an EMA of prior losses for the same target token ID.
+All sampled tokens enter the forward pass and the existing text mask still applies to CE.
+The first 290 updates use uniform weights, followed by a 290-update ramp to raw weights in [0.8, 1.2].
+The trainer normalizes weighted CE within each microbatch before adding both router penalties.
+The logs include the unweighted token NLL and the weighted CE separately. Start from scratch and
+resume from this variant's own checkpoints to restore the EMA. The existing prediction-graph ledger
+does not account for the extra loss-side weighting and EMA statistics.
 Packed Qwen3 experts process every selected assignment without dropping.
 
 SOAP with BF16 model weights, FP32 master weights, betas `(0.95, 0.95)` and

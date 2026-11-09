@@ -63,6 +63,12 @@ def make_recipe(tier, *, granularity_shift=0, expert_capacity_fraction=1.0, expe
     settings["training"]["h800_acceleration"] = dict(
         experts="auto", attention="auto", compile_swiglu=True,
     )
+    if tier == "3e17":
+        settings["training"]["adaptive_token_loss"] = dict(
+            ema_decay=0.99, prior_count=4.0, warmup_steps=290,
+            ramp_steps=290, max_weight_delta=0.2,
+        )
+        settings["run"]["name"] += "_adaptive_token_loss"
     activation = validate_family_settings(settings)
     curriculum = settings["training"]["length_curriculum"]
     if not 99 * preset["flops"] <= 100 * curriculum["planned_training_flops"] <= 100 * preset["flops"]:

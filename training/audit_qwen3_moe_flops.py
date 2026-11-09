@@ -53,6 +53,12 @@ def audit(settings, metrics_path):
     target = settings["budget"]["total_training_flops"]
     if not 99 * target <= 100 * total <= 101 * target:
         raise ValueError("Logged training path falls outside the supplied tier's +/-1% interval")
+    limitations = (
+        "Audits the complete logged successful-update path; unlogged failed attempts "
+        "cannot be inferred. Organizer review remains separate."
+    )
+    if training.get("adaptive_token_loss") is not None:
+        limitations += " The ledger excludes loss-side adaptive weights and EMA statistics."
     return {
         "status": "passed_log_path_audit", "organizer_certified": False,
         "tier": settings["submission"]["budget_tier"],
@@ -64,7 +70,7 @@ def audit(settings, metrics_path):
         "target_flops": target, "within_one_percent": True,
         "scalar_costs": {"exp": 1, "log": 1, "divide": 1},
         "scalar_costs_status": "Explicit convention; not specified by the supplied rule",
-        "limitations": "Audits the complete logged successful-update path; unlogged failed attempts cannot be inferred. Organizer review remains separate.",
+        "limitations": limitations,
     }
 
 
