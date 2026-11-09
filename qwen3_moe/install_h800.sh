@@ -17,6 +17,13 @@ if (( $# == 1 )); then
     [[ -f "$1" && "$1" == *grouped_gemm-0.2.0-*.whl ]] || { echo 'Expected a grouped_gemm 0.2.0 wheel' >&2; exit 2; }
     "$python_bin" -m pip install --no-deps --force-reinstall "$1"
 else
+    "$python_bin" - <<'PY'
+from pathlib import Path
+from torch.utils.cpp_extension import CUDA_HOME
+if CUDA_HOME is None or not (Path(CUDA_HOME) / 'bin/nvcc').is_file():
+    raise SystemExit('Source installation needs nvcc/CUDA toolkit (a runtime image is insufficient). '
+                     'Install a matching grouped_gemm 0.2.0 wheel instead, or build in a CUDA devel environment.')
+PY
     # CUDA-resident routing counts require the CUTLASS build, not cuBLAS fallback.
     GROUPED_GEMM_CUTLASS=1 TORCH_CUDA_ARCH_LIST=9.0 \
         "$python_bin" -m pip install --no-deps --force-reinstall --no-cache-dir \

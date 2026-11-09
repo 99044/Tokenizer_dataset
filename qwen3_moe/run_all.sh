@@ -18,6 +18,14 @@ export EVAL_BATCH_SIZE=${EVAL_BATCH_SIZE:-$default_eval_batch}
 export EVAL_FUSION_MODE=${EVAL_FUSION_MODE:-rmsnorm}
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}
 export TRITON_F32_DEFAULT=${TRITON_F32_DEFAULT:-ieee}
+if [[ ! "$EVAL_BATCH_SIZE" =~ ^[1-9][0-9]*$ ]]; then
+    echo 'EVAL_BATCH_SIZE must be a positive integer' >&2
+    exit 2
+fi
+if [[ "$EVAL_FUSION_MODE" != none && "$EVAL_FUSION_MODE" != rmsnorm ]]; then
+    echo 'Qwen3 MoE EVAL_FUSION_MODE must be none or rmsnorm' >&2
+    exit 2
+fi
 PYTHONPATH="$root/training/src${PYTHONPATH:+:$PYTHONPATH}" \
 "${PYTHON:-python}" - "$TRAIN_CONFIG" "$tier" "$CUDA_VISIBLE_DEVICES" <<'PY'
 from pathlib import Path

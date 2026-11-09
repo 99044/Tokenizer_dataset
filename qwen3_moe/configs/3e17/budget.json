@@ -9,7 +9,7 @@
   "active_non_vocabulary_parameters": 7918848,
   "active_non_vocabulary_fraction": 0.10267568186570805,
   "minimum_active_non_vocabulary_fraction": 0.1,
-  "architecture_family_id": "148f42b962720776269df7565e0c435aa4f96601c9d41dd576b4d759da37f433",
+  "architecture_family_id": "109b0c3dac22760311c367617b8e37ecca65dfcbf865e20b512b07ba662afe88",
   "expert_granularity": "1/2",
   "expert_activation_sparsity": 12.0,
   "tokens_per_update": 262144,

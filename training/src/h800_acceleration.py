@@ -107,7 +107,9 @@ def install_h800_acceleration(model, options=None):
     hopper = device.type == "cuda" and torch.cuda.get_device_capability(device) == (9, 0)
     report = dict(requested=options, experts="eager", attention="sdpa",
                   compile_swiglu=False, grouped_layers=0, fallback_reasons=[],
-                  torch_version=torch.__version__, cuda_version=torch.version.cuda)
+                  # TorchVersion is a str subclass that weights_only=True
+                  # does not allow-list. Checkpoint plans need a plain str.
+                  torch_version=str(torch.__version__), cuda_version=torch.version.cuda)
     before = tuple((name, id(p), tuple(p.shape)) for name, p in model.named_parameters())
     eligible = hopper and parameter.dtype == torch.bfloat16
 

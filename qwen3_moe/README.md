@@ -230,7 +230,8 @@ from a matching Python/PyTorch/CUDA/ABI wheel or by compiling for SM90:
 
 ```bash
 bash qwen3_moe/install_h800.sh /path/to/grouped_gemm-0.2.0-cp311-cp311-linux_x86_64.whl
-# Or build the pinned source with nvcc/CUDA 12.4; needs network/build tools:
+# Or build the pinned source with nvcc/CUDA 12.4; needs a devel environment,
+# network and build tools. A CUDA runtime image alone does not include nvcc.
 bash qwen3_moe/install_h800.sh
 
 # Run on an H800; repeat for other tiers to exercise their expert dimensions.
@@ -253,10 +254,21 @@ EVAL_FUSION_MODE=none bash qwen3_moe/run_all.sh 3e17 TRAIN_CACHE TOKENIZER EVAL_
 ```
 
 The development environment has no usable GPU. CPU output/gradient and FLOPs
-checks used torch 2.8.0 and the pinned Transformers 5.18.0; the target training
+checks used Python 3.10, torch 2.8.0 and the pinned Transformers 5.18.0; the target training
 environment remains torch 2.6.0+cu124. Native SM90 kernels, throughput and peak
 memory still need verification on the H800. No speedup or BPB improvement is
 claimed yet.
+
+The required environment files (`pyproject.toml`, `requirements.txt`, `uv.lock`)
+are unchanged from `qwen3-moe`: Python 3.11, torch 2.6.0+cu124, Transformers
+5.18.0, tokenizers 0.23.1 and Triton 3.2.0. Optional native extensions must
+match Python, torch, CUDA and C++ ABI. Missing/incompatible optional extensions
+fall back in auto mode; they are not required to use the baseline kernels.
+The acceleration report stores the torch version as a plain string so that
+native checkpoints can be read by `torch.load(weights_only=True)` on resume.
+This fix updates the recorded source/family hashes; a run already started
+under an older revision retains that revision's declaration. Do not combine
+its checkpoint with the new generated settings for exact resume.
 
 ## Train, export and evaluate
 
@@ -285,6 +297,8 @@ fourth path, for example `/mnt/runs/qwen3-moe-paper-3e17-001`; it must not
 already exist. Results appear in `train/`, `hf-model/`, `eval-result.json`
 and `flops-report.json` under the printed directory. The shared pipeline
 checks the caches and tokenizer before starting training.
+Invalid evaluation batch sizes and fusion modes are also rejected before
+training, rather than after completing the training/export pipeline.
 
 Run each tier with a new output directory. All four commands use **24K**
 training/evaluation caches and the matching tokenizer, including `1e19`.

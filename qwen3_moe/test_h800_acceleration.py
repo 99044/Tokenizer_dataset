@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 from importlib.metadata import version
+import io
 from pathlib import Path
 import sys
 import unittest
@@ -94,6 +95,17 @@ class GroupedExpertTests(unittest.TestCase):
             self.assertEqual(report["experts"], "eager")
             self.assertEqual(report["attention"], "sdpa")
             self.assertEqual(len(report["fallback_reasons"]), 2)
+            # Exercise the same safe-load mode as train_ddp --resume, with the
+            # actual runtime report nested in the saved training plan.
+            checkpoint = dict(model=model.state_dict(), plan={"acceleration": report})
+            buffer = io.BytesIO()
+            torch.save(checkpoint, buffer)
+            buffer.seek(0)
+            loaded = torch.load(buffer, map_location="cpu", weights_only=True)
+            self.assertEqual(type(loaded["plan"]["acceleration"]["torch_version"]), str)
+            self.assertEqual(loaded["plan"]["acceleration"], report)
+            for name, value in loaded["model"].items():
+                torch.testing.assert_close(value, model.state_dict()[name])
             self.assertEqual(before, {name: id(p) for name, p in model.named_parameters()})
             with self.assertRaisesRegex(RuntimeError, "Requested grouped_gemm unavailable"):
                 install_h800_acceleration(model, {"experts": "grouped_gemm"})
