@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the paper-scaling 3e17 recipe: train, export, evaluate, then audit FLOPs.
+# Train, export, evaluate, and audit the 3e17 Hi-MoE recipe.
 set -euo pipefail
 if (( $# < 3 || $# > 4 )); then
     echo 'Usage: bash qwen3_moe/run_3e17.sh TRAIN_CACHE TOKENIZER_DIR EVAL_CACHE [NEW_OUTPUT_DIR]' >&2

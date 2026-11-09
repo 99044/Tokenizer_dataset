@@ -213,7 +213,9 @@ def main():
         config, context_length, settings = build_model_config(args.config, vocab_size)
         is_qwen_moe = settings['model']['type'] == 'qwen3_moe'
         if is_qwen_moe:
-            from qwen3_moe_training import AccumulatedRouterBalance, router_z_loss
+            from qwen3_moe_training import (
+                AccumulatedRouterBalance, himoe_regularizers, router_z_loss, synchronize_himoe_ema,
+            )
             from training_data import PACKED_FORMAT, normalize_data_metadata
 
             if metadata.get('format') != PACKED_FORMAT:
@@ -534,6 +536,8 @@ def main():
                 balance = AccumulatedRouterBalance(model.lm.config, device) if is_qwen_moe else None
                 local_aux = torch.zeros_like(local_loss) if is_qwen_moe else None
                 local_z = torch.zeros_like(local_loss) if is_qwen_moe else None
+                local_inter = torch.zeros_like(local_loss) if is_qwen_moe else None
+                local_intra = torch.zeros_like(local_loss) if is_qwen_moe else None
                 z_coefficient = getattr(model.lm.config, 'router_z_loss_coef', 0.0) if is_qwen_moe else 0.0
                 for micro_step in range(grad_accum_steps):
                     if gdn_guard is not None:
@@ -555,6 +559,13 @@ def main():
                                 loss = loss + z_coefficient * z_loss
                                 local_z += z_loss.detach() / grad_accum_steps
                                 del z_loss
+                            hi_moe = getattr(model.lm.config, 'hi_moe', None)
+                            if hi_moe:
+                                inter, intra = himoe_regularizers(router_logits, hi_moe)
+                                loss = loss + inter + intra
+                                local_inter += inter.detach() / grad_accum_steps
+                                local_intra += intra.detach() / grad_accum_steps
+                                del inter, intra
                             del router_logits, aux
                         (loss / grad_accum_steps).backward()
                         local_loss += loss.detach() / grad_accum_steps
@@ -594,6 +605,8 @@ def main():
             if gdn_guard is not None:
                 gdn_guard.force_fp32 = force_fp32_gdn
             optimizer.step()
+            if is_qwen_moe:
+                synchronize_himoe_ema(model.lm)
             if ema is not None:
                 ema.update(step)
             scheduler.step()
@@ -623,8 +636,14 @@ def main():
                 mean_z = (local_z / world).item()
                 metrics['train/router_z_loss'] = mean_z
                 metrics['train/router_z_loss_weighted'] = z_coefficient * mean_z
+                dist.all_reduce(local_inter)
+                dist.all_reduce(local_intra)
+                mean_inter = (local_inter / world).item()
+                mean_intra = (local_intra / world).item()
+                metrics['train/himoe_inter_loss'] = mean_inter
+                metrics['train/himoe_intra_loss'] = mean_intra
                 metrics['train/token_nll'] = (mean_loss - model.lm.config.router_aux_loss_coef * mean_aux
-                                               - z_coefficient * mean_z)
+                                               - z_coefficient * mean_z - mean_inter - mean_intra)
                 if rank == 0:
                     metrics.update(balance.metrics())
             for index, group in enumerate(optimizer_report['groups']):

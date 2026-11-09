@@ -55,8 +55,9 @@ def make_recipe(tier, *, granularity_shift=0, expert_capacity_fraction=1.0, expe
         raise ValueError("tokens_per_update is too large for the FLOPs budget")
     settings = make_training_settings(
         config, baseline, budget_tier=tier,
-        run_name=f"qwen3_moe_{tier}_e{experts}_k{top_k}_soap",
-        learning_rate=lr, warmup_fraction=0.02, cooldown_fraction=0.20,
+        run_name=f"qwen3_himoe_{tier}_e{experts}_k{top_k}_soap",
+        learning_rate=lr, warmup_fraction=0.05, cooldown_fraction=0.30,
+        final_lr_ratio=0.01,
         enforce_legacy_limits=False,
     )
     settings["architecture_family"] = family

@@ -35,6 +35,7 @@ def architecture_for_hidden(hidden, family):
     # At d=256/384/512/768, default K is 2/2/4/8. The algorithm stays fixed.
     top_k = max(2, 2 ** (hidden // 256 + family["granularity_shift"]))
     config.update(
+        architectures=["Qwen3HiMoeForCausalLM"],
         hidden_size=hidden, num_hidden_layers=hidden // 32,
         num_attention_heads=hidden // 64, num_key_value_heads=2, head_dim=64,
         intermediate_size=4 * hidden, moe_intermediate_size=4 * hidden // top_k,
@@ -47,6 +48,12 @@ def architecture_for_hidden(hidden, family):
     config["num_experts"] = count // alignment * alignment
     if config["num_experts"] <= top_k:
         raise ValueError("Capacity fraction/alignment leaves too few experts")
+    groups = 2 if top_k == 2 else 4
+    config["hi_moe"] = {
+        "groups": groups, "per_group": top_k // groups,
+        "temperature": 1.0, "lambda_intra": 0.1, "lambda_inter": 0.05,
+        "bias_strength": 0.01, "ema_decay": 0.9,
+    }
     return config
 
 
@@ -80,11 +87,13 @@ def make_family(granularity_shift=0, expert_capacity_fraction=1.0, expert_alignm
             "connections": "pre-norm residual attention followed by residual routed FFN",
             "activation": "SwiGLU",
             "position_encoding": "RoPE, theta=1000000",
-            "routing": "dropless token-choice softmax/top-k with renormalized selected weights; K follows the declared size rule",
+            "routing": "group-local Top-K with FP32 router EMA correction and renormalized selected weights; K follows the declared size rule",
+            "routing_objective": "standard expert balance plus Hi-MoE inter-group and intra-group regularizers",
             "shared_experts": 0,
         },
         "transformers_version": "5.18.0",
         "model_code_sha256": hashlib.sha256((ROOT / "training/src/qwen3_moe_training.py").read_bytes()).hexdigest(),
+        "himoe_code_sha256": hashlib.sha256((ROOT / "training/src/hf_qwen3_himoe.py").read_bytes()).hexdigest(),
         "acceleration_code_sha256": hashlib.sha256((ROOT / "training/src/h800_acceleration.py").read_bytes()).hexdigest(),
         "base_config_sha256": hashlib.sha256((ROOT / "qwen3_moe_a20m/config.json").read_bytes()).hexdigest(),
         "generation_code_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),

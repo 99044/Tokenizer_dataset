@@ -55,7 +55,8 @@ def make_plan(config, world_size=4, grad_accumulation=16, target_flops=TARGET_FL
 
 def make_training_settings(config, baseline, target_tokens=None, *, budget_tier="3e17",
                            run_name=None, learning_rate=0.003, warmup_fraction=None,
-                           cooldown_fraction=None, enforce_legacy_limits=True):
+                           cooldown_fraction=None, final_lr_ratio=0.0,
+                           enforce_legacy_limits=True):
     from context_curriculum import apply_length_curriculum
 
     seq = config["max_position_embeddings"]
@@ -77,7 +78,7 @@ def make_training_settings(config, baseline, target_tokens=None, *, budget_tier=
         },
         "scheduler": {
             "name": "linear_cooldown", "warmup_steps": 20,
-            "cooldown_steps": round(full_steps * 432 / 2570), "final_lr_ratio": 0.0,
+            "cooldown_steps": round(full_steps * 432 / 2570), "final_lr_ratio": final_lr_ratio,
         },
         "data": {
             "format": "npy_packed_tokens",

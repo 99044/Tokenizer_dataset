@@ -47,7 +47,7 @@ class RecipeTests(unittest.TestCase):
                     for step in (stage["first_step"], stage["last_step"]):
                         self.assertEqual(curriculum_stage(settings, step), stage)
                         self.assertTrue(0 <= curriculum_lr_factor(settings, step - 1) <= 1)
-                self.assertEqual(curriculum_lr_factor(settings, training["max_steps"]), 0)
+                self.assertAlmostEqual(curriculum_lr_factor(settings, training["max_steps"]), 0.01)
                 self.assertGreater(budget["training_tokens_per_active_parameter"], 20)
 
     def test_granularity_candidates_preserve_active_ffn_compute(self):
@@ -82,7 +82,7 @@ class RecipeTests(unittest.TestCase):
                         self.assertEqual(stage["grad_accum_steps"], accumulation)
                         self.assertEqual(stage["flops_per_update"] * old_budget["tokens_per_update"],
                                          old["flops_per_update"] * tokens)
-                    self.assertEqual(curriculum_lr_factor(settings, training["max_steps"]), 0)
+                    self.assertAlmostEqual(curriculum_lr_factor(settings, training["max_steps"]), 0.01)
 
     def test_batch_cli_writes_a_directly_usable_tier(self):
         with tempfile.TemporaryDirectory() as temp, redirect_stdout(io.StringIO()) as output:

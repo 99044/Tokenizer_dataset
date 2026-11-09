@@ -1,15 +1,18 @@
-# Four Qwen3 MoE recipes for 8 x H800
+# Four Qwen3 Hi-MoE recipes for 8 x H800
 
 These are **unmeasured starting recipes** for optimizing the competition's
 four-tier Performance score, combining fitted BPB and scaling consistency.
 No full training run or BPB improvement is claimed. The hardware target
 assumes 80 GiB per H800. All tiers use the same established 24,576-token
 tokenizer and native NPY/text-mask caches.
+This Hi-MoE revision has not been trial-trained on H800 yet.
 
 The design follows [Slicing and Dicing](https://arxiv.org/html/2605.11689),
 sections 3.1–3.3 and appendix C.3: increase inactive capacity within memory
 limits, use coarser experts at smaller active scales, avoid top-1, and use
-dropless token-choice routing without shared experts. The paper also finds
+dropless token-choice routing without shared experts. This branch adds
+[Hi-MoE](https://arxiv.org/html/2605.08292) group-local selection, its two
+router regularizers and EMA logit correction. The paper also finds
 that small MoEs need sufficient training data. These trends motivate the
 recipes; they do not establish the best BPB on our data.
 
@@ -30,7 +33,11 @@ size parameters to scale; they do not require identical expert count/top-k:
 top-2/2/4/8 and expert granularities 1/2, 1/2, 1/4, 1/8. This transfers the
 paper's coarse-to-fine trend into a single size rule; it is a candidate to
 validate on our data, not a measured optimum. Layer types, connections,
-SwiGLU, RoPE and the softmax/token-choice/top-k algorithm stay the same.
+SwiGLU and RoPE stay the same. Group-local Top-K selects one expert from each
+of two groups in the Top-2 tiers, one from each of four groups at Top-4, and
+two from each of four groups at Top-8. The 47/94-expert groups differ in size
+by at most one. Selected weights keep Qwen3's normalization; this is an
+adaptation of Hi-MoE rather than an exact reproduction of its forward formula.
 `architecture_family` records the formulas, model/generator source hashes,
 Transformers version and a shared family ID. Launch and model construction
 check the declaration and reject per-tier architecture edits.
@@ -82,7 +89,8 @@ Packed Qwen3 experts process every selected assignment without dropping.
 SOAP with BF16 model weights, FP32 master weights, betas `(0.95, 0.95)` and
 weight decay 0.1 retains the existing training path. The LR values are local
 starting hypotheses, **not** values established by the paper, which uses Adam.
-Warmup uses 2% and linear cooldown uses 20% of planned training FLOPs.
+Warmup uses 5% of planned training FLOPs, a plateau lasts to 70%, and the
+final 30% cools down linearly to 1% of peak LR.
 The 2K/4K/8K curriculum allocates 50%/20%/the remainder of compute, preserving
 global tokens per update. Each tier's step count is recalculated independently.
 Stage boundaries and ten milestones within the 8K stage receive validation
@@ -97,7 +105,7 @@ that batch as optimal for our data, SOAP optimizer or FLOPs budgets.
 
 | Tier | Previous tokens/update | Selected tokens/update | Accumulation/rank | Previous updates | Selected updates |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| 3e17 | 262,144 | 262,144 | 4 | 8,716 | 8,716 |
+| 3e17 | 262,144 | 262,144 | 4 | 8,716 | 8,715 |
 | 1e18 | 524,288 | 524,288 | 8 | 6,006 | 6,006 |
 | 3e18 | 524,288 | 1,048,576 | 16 | 9,069 | 4,534 |
 | 1e19 | 524,288 | 1,048,576 | 16 | 10,750 | 5,375 |
@@ -138,11 +146,12 @@ python -m unittest discover -s qwen3_moe -p 'test_*.py'
 python qwen3_moe/validate.py
 ```
 
-Each `configs/TIER/` contains a stock HF `config.json`, the production
+Each `configs/TIER/` contains a Qwen3 HF `config.json` with `hi_moe` fields, the production
 `training.yaml`, and `budget.json` with exact step/token counts and the
 full-8K reference. Validation checks full model parameter counts on the meta
 device and runs tiny CPU forward/backward/FP32 SOAP updates for each recipe.
-This does not measure GPU throughput, peak memory or trained BPB.
+Those checks are available but have not been run for this revision on H800;
+they do not measure GPU throughput, peak memory or trained BPB.
 
 ## Competition-reference FLOPs accounting
 
@@ -161,8 +170,9 @@ attention-softmax/LM-loss elementwise exclusions follow the reference.
 No total-parameter `6N` approximation is used.
 
 `training/src/qwen3_moe_flops.py` separately lists the routing graph's
-projection, full expert softmax, top-k renormalization, weighted merge,
-active-path gradient scatter, accumulated auxiliary loss and Router Z-loss
+projection, full expert softmax, group-local top-k renormalization, weighted merge,
+active-path gradient scatter, accumulated auxiliary loss, Hi-MoE regularizers,
+EMA router correction and Router Z-loss
 (stable logsumexp, square, reductions, coefficients and backward merges).
 Its forward and backward are counted independently; the old
 `32*(experts+top_k)` proxy is gone from this protocol. Integer counts, top-k
@@ -253,11 +263,9 @@ QWEN_MOE_EXPERTS=eager QWEN_MOE_ATTENTION=sdpa QWEN_MOE_COMPILE_SWIGLU=0 \
 EVAL_FUSION_MODE=none bash qwen3_moe/run_all.sh 3e17 TRAIN_CACHE TOKENIZER EVAL_CACHE NEW_OUTPUT
 ```
 
-The development environment has no usable GPU. CPU output/gradient and FLOPs
-checks used Python 3.10, torch 2.8.0 and the pinned Transformers 5.18.0; the target training
-environment remains torch 2.6.0+cu124. Native SM90 kernels, throughput and peak
-memory still need verification on the H800. No speedup or BPB improvement is
-claimed yet.
+The target training environment is torch 2.6.0+cu124. Native SM90 kernels,
+throughput, peak memory and training stability still need H800 verification.
+No speedup or BPB improvement is claimed yet.
 
 The required environment files (`pyproject.toml`, `requirements.txt`, `uv.lock`)
 are unchanged from `qwen3-moe`: Python 3.11, torch 2.6.0+cu124, Transformers
@@ -276,13 +284,12 @@ For **3e17 only**, the dedicated wrapper fixes the paper-scaling configuration
 and uses eight GPUs. Its three cache/tokenizer arguments match the archived
 A20M launcher; an optional fourth argument specifies a new output directory.
 Without it, the wrapper prints a unique directory under `runs/`. It completes
-all 8,716 optimizer updates, CPU HF export, packed BPB evaluation and the
+all 8,715 optimizer updates, CPU HF export, packed BPB evaluation and the
 successful-training-path FLOPs audit:
 
 ```bash
 git fetch origin
-git switch qwen3-moe-paper-scaling
-git pull --ff-only origin qwen3-moe-paper-scaling
+git switch qwen3-moe-himoe-20261110
 
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
 EVAL_GPU=0 EVAL_BATCH_SIZE=64 \
@@ -310,7 +317,8 @@ bash qwen3_moe/run_all.sh 3e18 "$TRAIN_CACHE" "$TOKENIZER_DIR" "$EVAL_CACHE" "$R
 bash qwen3_moe/run_all.sh 1e19 "$TRAIN_CACHE" "$TOKENIZER_DIR" "$EVAL_CACHE" "$RUNS/1e19"
 ```
 
-These commands use eight GPUs, FP32 SOAP training, CPU HF export and one-GPU
+These commands use eight GPUs, BF16 model weights with FP32 SOAP master weights,
+CPU HF export and one-GPU
 8K packed BPB evaluation with Hopper backend selection and RMSNorm fusion. Evaluation batches
 default to 8/4/1/1; `EVAL_BATCH_SIZE` can override this after a memory check.
 The result is `OUTPUT/eval-result.json`. Evaluation batch size changes memory

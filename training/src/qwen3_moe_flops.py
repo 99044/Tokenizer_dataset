@@ -146,6 +146,30 @@ def routing_ledger(config, tokens, *, include_input_scatter=True, include_loss_w
             add("z_loss.loss_coefficient", "multiply", 1, copies=1)
             add("z_loss.loss_add", "add", 1, copies=1)
             add("z_loss.loss_coefficient_gradient", "multiply", 1, "backward", copies=1)
+    if config.get("hi_moe"):
+        # The grouped Top-K comparisons are integer selection; the added FP32
+        # probability and regularizer arithmetic is charged explicitly.
+        add("himoe.bias_scale", "multiply", tokens * experts)
+        add("himoe.bias_subtract", "subtract", tokens * experts)
+        add("himoe.temperature_divide", "divide", tokens * experts)
+        add("himoe.ema_token_sum", "add", (tokens - 1) * experts)
+        add("himoe.ema_token_mean", "divide", experts)
+        add("himoe.ema_update", "multiply", 2 * experts)
+        add("himoe.ema_accumulate", "add", experts)
+        add("himoe.regularizer_softmax_subtract", "subtract", tokens * experts)
+        add("himoe.regularizer_softmax_exp", "exp", tokens * experts)
+        add("himoe.regularizer_softmax_sum", "add", tokens * (experts - 1))
+        add("himoe.regularizer_softmax_divide", "divide", tokens * experts)
+        add("himoe.inter_square", "multiply", tokens * top_k)
+        add("himoe.inter_sum", "add", tokens * (top_k - 1))
+        add("himoe.intra_square", "multiply", tokens * experts)
+        add("himoe.intra_sum", "add", tokens * (experts - 1))
+        add("himoe.regularizer_softmax_gradient", "multiply", 2 * tokens * experts, "backward")
+        add("himoe.regularizer_softmax_gradient_sum", "add", tokens * (experts - 1), "backward")
+        add("himoe.regularizer_softmax_gradient_subtract", "subtract", tokens * experts, "backward")
+        add("himoe.inter_square_gradient", "multiply", 2 * tokens * top_k, "backward")
+        add("himoe.intra_square_gradient", "multiply", 2 * tokens * experts, "backward")
+        add("himoe.router_gradient_merge", "add", 2 * tokens * experts, "backward")
     return operations
 
 

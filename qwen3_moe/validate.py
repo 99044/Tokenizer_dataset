@@ -8,14 +8,15 @@ import sys
 import torch
 import torch.nn.functional as F
 import transformers
-from transformers import AutoModelForCausalLM, Qwen3MoeConfig
+from transformers import Qwen3MoeConfig
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT.parent))
 from qwen3_moe.plan import TIERS, make_recipe
 from fp32_master import FP32MasterWeights
 from optimizer_factory import build_optimizer
-from qwen3_moe_training import AccumulatedRouterBalance, Qwen3MoeTrainingConfig, router_z_loss
+from qwen3_moe_training import AccumulatedRouterBalance, Qwen3MoeTrainingConfig, himoe_regularizers, router_z_loss
+from hf_qwen3_himoe import Qwen3HiMoeForCausalLM
 from qwen3_moe_rules import validate_family_settings
 
 
@@ -28,9 +29,7 @@ def main():
         activation = validate_family_settings(settings, check_runtime=True)
         # Check the full production architecture without allocating its weights.
         with torch.device("meta"):
-            lm = AutoModelForCausalLM.from_config(
-                Qwen3MoeConfig.from_dict(deepcopy(config)), dtype=torch.bfloat16, attn_implementation="sdpa",
-            )
+            lm = Qwen3HiMoeForCausalLM(Qwen3MoeConfig.from_dict(deepcopy(config)))
         total = sum(p.numel() for p in lm.parameters())
         experts = [p for name, p in lm.named_parameters() if ".mlp.experts." in name]
         if not experts or any(p.ndim != 3 for p in experts):
@@ -68,8 +67,10 @@ def main():
                 logits, routers = model(inputs, route=True)
                 aux = balance(routers)
                 ce = F.cross_entropy(logits.float().reshape(-1, 32), labels.flatten())
+                inter, intra = himoe_regularizers(routers, config["hi_moe"])
                 loss = (ce + config["router_aux_loss_coef"] * aux
-                        + config["router_z_loss_coef"] * router_z_loss(routers)) / 2
+                        + config["router_z_loss_coef"] * router_z_loss(routers)
+                        + inter + intra) / 2
                 assert torch.isfinite(loss)
                 loss.backward()
             assert torch.all(balance.counts.sum(-1) == 32 * config["num_experts_per_tok"])

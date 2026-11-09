@@ -9,19 +9,19 @@
   "active_non_vocabulary_parameters": 61221376,
   "active_non_vocabulary_fraction": 0.10164824655435796,
   "minimum_active_non_vocabulary_fraction": 0.1,
-  "architecture_family_id": "109b0c3dac22760311c367617b8e37ecca65dfcbf865e20b512b07ba662afe88",
+  "architecture_family_id": "143f82292e736d10be9b057294602fb632d119363255e37c3cac46b7e91510cd",
   "expert_granularity": "1/4",
   "expert_activation_sparsity": 11.75,
   "tokens_per_update": 1048576,
   "optimizer_updates": 4534,
   "planned_training_tokens": 4754243584,
   "target_flops": 3000000000000000000,
-  "estimated_training_flops": 2999548285267290112,
+  "estimated_training_flops": 2999613552832485376,
   "flops_protocol": "scicomp26-megatron-qwen3-moe-router-zloss-v2",
   "megatron_reference_matched": true,
   "router_graph_audited": true,
   "organizer_certified": false,
-  "flops_utilization": 0.9998494284224301,
+  "flops_utilization": 0.9998711842774951,
   "training_tokens_per_active_parameter": 55.03412061046081,
   "persistent_state_lower_bound_gib_per_gpu": 11.687211990356445,
   "memory_limitations": "20 bytes/parameter counts BF16 weights, shared BF16 gradient/DDP buckets, FP32 masters/gradients and FP32 SOAP moments. Excludes SOAP preconditioners, optimizer temporaries, activations, logits, CUDA/NCCL and allocator overhead. DDP replicates all experts on each GPU. Verify peak memory on H800 before a full run.",
@@ -45,13 +45,13 @@
     "grad_accumulation_steps": 16,
     "sequence_length": 8192,
     "tokens_per_update": 1048576,
-    "flops_per_microbatch": 6927074200568,
-    "flops_per_token": 845590112.3740234,
-    "flops_per_update": 886665497672704,
+    "flops_per_microbatch": 6927186662600,
+    "flops_per_token": 845603840.6494141,
+    "flops_per_update": 886679892812800,
     "target_flops": 3000000000000000000,
     "optimizer_updates": 3383,
     "planned_training_tokens": 3547332608,
-    "estimated_training_flops": 2999589378626757632,
+    "estimated_training_flops": 2999638077385702400,
     "attention_core_and_elementwise_flops_per_microbatch": 3298534883328,
     "accounting": "scicomp26-megatron-qwen3-moe-router-zloss-v2",
     "excluded": [
@@ -63,13 +63,13 @@
   "flops_audit": {
     "2048": {
       "protocol": "scicomp26-megatron-qwen3-moe-router-zloss-v2",
-      "estimated_total": 4453173038072,
+      "estimated_total": 4453285500104,
       "attention_core_and_elementwise": 824633720832,
       "reference_matched": true,
       "router_graph_audited": true,
       "official_ledger": false,
       "reference_function_sha256": "4d6e6daf89926f83f4e5009f337540cf1f16850e1b18d9b1c6cb6fb74b93fc97",
-      "counter_code_sha256": "9f6927689b03aaba3f855b4703408d9f34a45793a7e8a6f1fd68e875744f218c",
+      "counter_code_sha256": "b167889d21315662ed1836caa138c0ddfc81d75a5659faacbb954520c0dce030",
       "reference_source": "https://github.com/NVIDIA/Megatron-LM/blob/main/megatron/training/training.py",
       "megatron_reference_total": 4432406249472,
       "megatron_components": {
@@ -79,8 +79,8 @@
         "lm_head": 618475290624
       },
       "router_projection_gemm": 18924699648,
-      "router_forward": 6920079589,
-      "router_backward": 13846709011,
+      "router_forward": 6982341045,
+      "router_backward": 13896909587,
       "router_operations": [
         {
           "kind": "matmul",
@@ -603,6 +603,165 @@
           "elements": 1,
           "calls": 1,
           "phase": "backward"
+        },
+        {
+          "name": "himoe.bias_scale",
+          "kind": "multiply",
+          "elements": 385024,
+          "calls": 16,
+          "phase": "forward"
+        },
+        {
+          "name": "himoe.bias_subtract",
+          "kind": "subtract",
+          "elements": 385024,
+          "calls": 16,
+          "phase": "forward"
+        },
+        {
+          "name": "himoe.temperature_divide",
+          "kind": "audited_scalar",
+          "operation": "divide",
+          "elements": 385024,
+          "calls": 16,
+          "phase": "forward",
+          "flops_per_element": 1,
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
+        },
+        {
+          "name": "himoe.ema_token_sum",
+          "kind": "add",
+          "elements": 384977,
+          "calls": 16,
+          "phase": "forward"
+        },
+        {
+          "name": "himoe.ema_token_mean",
+          "kind": "audited_scalar",
+          "operation": "divide",
+          "elements": 47,
+          "calls": 16,
+          "phase": "forward",
+          "flops_per_element": 1,
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
+        },
+        {
+          "name": "himoe.ema_update",
+          "kind": "multiply",
+          "elements": 94,
+          "calls": 16,
+          "phase": "forward"
+        },
+        {
+          "name": "himoe.ema_accumulate",
+          "kind": "add",
+          "elements": 47,
+          "calls": 16,
+          "phase": "forward"
+        },
+        {
+          "name": "himoe.regularizer_softmax_subtract",
+          "kind": "subtract",
+          "elements": 385024,
+          "calls": 16,
+          "phase": "forward"
+        },
+        {
+          "name": "himoe.regularizer_softmax_exp",
+          "kind": "audited_scalar",
+          "operation": "exp",
+          "elements": 385024,
+          "calls": 16,
+          "phase": "forward",
+          "flops_per_element": 1,
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
+        },
+        {
+          "name": "himoe.regularizer_softmax_sum",
+          "kind": "add",
+          "elements": 376832,
+          "calls": 16,
+          "phase": "forward"
+        },
+        {
+          "name": "himoe.regularizer_softmax_divide",
+          "kind": "audited_scalar",
+          "operation": "divide",
+          "elements": 385024,
+          "calls": 16,
+          "phase": "forward",
+          "flops_per_element": 1,
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
+        },
+        {
+          "name": "himoe.inter_square",
+          "kind": "multiply",
+          "elements": 32768,
+          "calls": 16,
+          "phase": "forward"
+        },
+        {
+          "name": "himoe.inter_sum",
+          "kind": "add",
+          "elements": 24576,
+          "calls": 16,
+          "phase": "forward"
+        },
+        {
+          "name": "himoe.intra_square",
+          "kind": "multiply",
+          "elements": 385024,
+          "calls": 16,
+          "phase": "forward"
+        },
+        {
+          "name": "himoe.intra_sum",
+          "kind": "add",
+          "elements": 376832,
+          "calls": 16,
+          "phase": "forward"
+        },
+        {
+          "name": "himoe.regularizer_softmax_gradient",
+          "kind": "multiply",
+          "elements": 770048,
+          "calls": 16,
+          "phase": "backward"
+        },
+        {
+          "name": "himoe.regularizer_softmax_gradient_sum",
+          "kind": "add",
+          "elements": 376832,
+          "calls": 16,
+          "phase": "backward"
+        },
+        {
+          "name": "himoe.regularizer_softmax_gradient_subtract",
+          "kind": "subtract",
+          "elements": 385024,
+          "calls": 16,
+          "phase": "backward"
+        },
+        {
+          "name": "himoe.inter_square_gradient",
+          "kind": "multiply",
+          "elements": 65536,
+          "calls": 16,
+          "phase": "backward"
+        },
+        {
+          "name": "himoe.intra_square_gradient",
+          "kind": "multiply",
+          "elements": 770048,
+          "calls": 16,
+          "phase": "backward"
+        },
+        {
+          "name": "himoe.router_gradient_merge",
+          "kind": "add",
+          "elements": 770048,
+          "calls": 16,
+          "phase": "backward"
         }
       ],
       "components": {
@@ -610,7 +769,7 @@
         "attention_core": 824633720832,
         "active_expert_projections": 2473901162496,
         "lm_head": 618475290624,
-        "router_supplement": 20766788600
+        "router_supplement": 20879250632
       },
       "scalar_costs": {
         "exp": 1,
@@ -641,13 +800,13 @@
     },
     "4096": {
       "protocol": "scicomp26-megatron-qwen3-moe-router-zloss-v2",
-      "estimated_total": 5277806758904,
+      "estimated_total": 5277919220936,
       "attention_core_and_elementwise": 1649267441664,
       "reference_matched": true,
       "router_graph_audited": true,
       "official_ledger": false,
       "reference_function_sha256": "4d6e6daf89926f83f4e5009f337540cf1f16850e1b18d9b1c6cb6fb74b93fc97",
-      "counter_code_sha256": "9f6927689b03aaba3f855b4703408d9f34a45793a7e8a6f1fd68e875744f218c",
+      "counter_code_sha256": "b167889d21315662ed1836caa138c0ddfc81d75a5659faacbb954520c0dce030",
       "reference_source": "https://github.com/NVIDIA/Megatron-LM/blob/main/megatron/training/training.py",
       "megatron_reference_total": 5257039970304,
       "megatron_components": {
@@ -657,8 +816,8 @@
         "lm_head": 618475290624
       },
       "router_projection_gemm": 18924699648,
-      "router_forward": 6920079589,
-      "router_backward": 13846709011,
+      "router_forward": 6982341045,
+      "router_backward": 13896909587,
       "router_operations": [
         {
           "kind": "matmul",
@@ -1181,6 +1340,165 @@
           "elements": 1,
           "calls": 1,
           "phase": "backward"
+        },
+        {
+          "name": "himoe.bias_scale",
+          "kind": "multiply",
+          "elements": 385024,
+          "calls": 16,
+          "phase": "forward"
+        },
+        {
+          "name": "himoe.bias_subtract",
+          "kind": "subtract",
+          "elements": 385024,
+          "calls": 16,
+          "phase": "forward"
+        },
+        {
+          "name": "himoe.temperature_divide",
+          "kind": "audited_scalar",
+          "operation": "divide",
+          "elements": 385024,
+          "calls": 16,
+          "phase": "forward",
+          "flops_per_element": 1,
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
+        },
+        {
+          "name": "himoe.ema_token_sum",
+          "kind": "add",
+          "elements": 384977,
+          "calls": 16,
+          "phase": "forward"
+        },
+        {
+          "name": "himoe.ema_token_mean",
+          "kind": "audited_scalar",
+          "operation": "divide",
+          "elements": 47,
+          "calls": 16,
+          "phase": "forward",
+          "flops_per_element": 1,
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
+        },
+        {
+          "name": "himoe.ema_update",
+          "kind": "multiply",
+          "elements": 94,
+          "calls": 16,
+          "phase": "forward"
+        },
+        {
+          "name": "himoe.ema_accumulate",
+          "kind": "add",
+          "elements": 47,
+          "calls": 16,
+          "phase": "forward"
+        },
+        {
+          "name": "himoe.regularizer_softmax_subtract",
+          "kind": "subtract",
+          "elements": 385024,
+          "calls": 16,
+          "phase": "forward"
+        },
+        {
+          "name": "himoe.regularizer_softmax_exp",
+          "kind": "audited_scalar",
+          "operation": "exp",
+          "elements": 385024,
+          "calls": 16,
+          "phase": "forward",
+          "flops_per_element": 1,
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
+        },
+        {
+          "name": "himoe.regularizer_softmax_sum",
+          "kind": "add",
+          "elements": 376832,
+          "calls": 16,
+          "phase": "forward"
+        },
+        {
+          "name": "himoe.regularizer_softmax_divide",
+          "kind": "audited_scalar",
+          "operation": "divide",
+          "elements": 385024,
+          "calls": 16,
+          "phase": "forward",
+          "flops_per_element": 1,
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
+        },
+        {
+          "name": "himoe.inter_square",
+          "kind": "multiply",
+          "elements": 32768,
+          "calls": 16,
+          "phase": "forward"
+        },
+        {
+          "name": "himoe.inter_sum",
+          "kind": "add",
+          "elements": 24576,
+          "calls": 16,
+          "phase": "forward"
+        },
+        {
+          "name": "himoe.intra_square",
+          "kind": "multiply",
+          "elements": 385024,
+          "calls": 16,
+          "phase": "forward"
+        },
+        {
+          "name": "himoe.intra_sum",
+          "kind": "add",
+          "elements": 376832,
+          "calls": 16,
+          "phase": "forward"
+        },
+        {
+          "name": "himoe.regularizer_softmax_gradient",
+          "kind": "multiply",
+          "elements": 770048,
+          "calls": 16,
+          "phase": "backward"
+        },
+        {
+          "name": "himoe.regularizer_softmax_gradient_sum",
+          "kind": "add",
+          "elements": 376832,
+          "calls": 16,
+          "phase": "backward"
+        },
+        {
+          "name": "himoe.regularizer_softmax_gradient_subtract",
+          "kind": "subtract",
+          "elements": 385024,
+          "calls": 16,
+          "phase": "backward"
+        },
+        {
+          "name": "himoe.inter_square_gradient",
+          "kind": "multiply",
+          "elements": 65536,
+          "calls": 16,
+          "phase": "backward"
+        },
+        {
+          "name": "himoe.intra_square_gradient",
+          "kind": "multiply",
+          "elements": 770048,
+          "calls": 16,
+          "phase": "backward"
+        },
+        {
+          "name": "himoe.router_gradient_merge",
+          "kind": "add",
+          "elements": 770048,
+          "calls": 16,
+          "phase": "backward"
         }
       ],
       "components": {
@@ -1188,7 +1506,7 @@
         "attention_core": 1649267441664,
         "active_expert_projections": 2473901162496,
         "lm_head": 618475290624,
-        "router_supplement": 20766788600
+        "router_supplement": 20879250632
       },
       "scalar_costs": {
         "exp": 1,
@@ -1219,13 +1537,13 @@
     },
     "8192": {
       "protocol": "scicomp26-megatron-qwen3-moe-router-zloss-v2",
-      "estimated_total": 6927074200568,
+      "estimated_total": 6927186662600,
       "attention_core_and_elementwise": 3298534883328,
       "reference_matched": true,
       "router_graph_audited": true,
       "official_ledger": false,
       "reference_function_sha256": "4d6e6daf89926f83f4e5009f337540cf1f16850e1b18d9b1c6cb6fb74b93fc97",
-      "counter_code_sha256": "9f6927689b03aaba3f855b4703408d9f34a45793a7e8a6f1fd68e875744f218c",
+      "counter_code_sha256": "b167889d21315662ed1836caa138c0ddfc81d75a5659faacbb954520c0dce030",
       "reference_source": "https://github.com/NVIDIA/Megatron-LM/blob/main/megatron/training/training.py",
       "megatron_reference_total": 6906307411968,
       "megatron_components": {
@@ -1235,8 +1553,8 @@
         "lm_head": 618475290624
       },
       "router_projection_gemm": 18924699648,
-      "router_forward": 6920079589,
-      "router_backward": 13846709011,
+      "router_forward": 6982341045,
+      "router_backward": 13896909587,
       "router_operations": [
         {
           "kind": "matmul",
@@ -1759,6 +2077,165 @@
           "elements": 1,
           "calls": 1,
           "phase": "backward"
+        },
+        {
+          "name": "himoe.bias_scale",
+          "kind": "multiply",
+          "elements": 385024,
+          "calls": 16,
+          "phase": "forward"
+        },
+        {
+          "name": "himoe.bias_subtract",
+          "kind": "subtract",
+          "elements": 385024,
+          "calls": 16,
+          "phase": "forward"
+        },
+        {
+          "name": "himoe.temperature_divide",
+          "kind": "audited_scalar",
+          "operation": "divide",
+          "elements": 385024,
+          "calls": 16,
+          "phase": "forward",
+          "flops_per_element": 1,
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
+        },
+        {
+          "name": "himoe.ema_token_sum",
+          "kind": "add",
+          "elements": 384977,
+          "calls": 16,
+          "phase": "forward"
+        },
+        {
+          "name": "himoe.ema_token_mean",
+          "kind": "audited_scalar",
+          "operation": "divide",
+          "elements": 47,
+          "calls": 16,
+          "phase": "forward",
+          "flops_per_element": 1,
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
+        },
+        {
+          "name": "himoe.ema_update",
+          "kind": "multiply",
+          "elements": 94,
+          "calls": 16,
+          "phase": "forward"
+        },
+        {
+          "name": "himoe.ema_accumulate",
+          "kind": "add",
+          "elements": 47,
+          "calls": 16,
+          "phase": "forward"
+        },
+        {
+          "name": "himoe.regularizer_softmax_subtract",
+          "kind": "subtract",
+          "elements": 385024,
+          "calls": 16,
+          "phase": "forward"
+        },
+        {
+          "name": "himoe.regularizer_softmax_exp",
+          "kind": "audited_scalar",
+          "operation": "exp",
+          "elements": 385024,
+          "calls": 16,
+          "phase": "forward",
+          "flops_per_element": 1,
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
+        },
+        {
+          "name": "himoe.regularizer_softmax_sum",
+          "kind": "add",
+          "elements": 376832,
+          "calls": 16,
+          "phase": "forward"
+        },
+        {
+          "name": "himoe.regularizer_softmax_divide",
+          "kind": "audited_scalar",
+          "operation": "divide",
+          "elements": 385024,
+          "calls": 16,
+          "phase": "forward",
+          "flops_per_element": 1,
+          "counting_basis": "Declared exp/log/divide cost 1; not specified by supplied rule"
+        },
+        {
+          "name": "himoe.inter_square",
+          "kind": "multiply",
+          "elements": 32768,
+          "calls": 16,
+          "phase": "forward"
+        },
+        {
+          "name": "himoe.inter_sum",
+          "kind": "add",
+          "elements": 24576,
+          "calls": 16,
+          "phase": "forward"
+        },
+        {
+          "name": "himoe.intra_square",
+          "kind": "multiply",
+          "elements": 385024,
+          "calls": 16,
+          "phase": "forward"
+        },
+        {
+          "name": "himoe.intra_sum",
+          "kind": "add",
+          "elements": 376832,
+          "calls": 16,
+          "phase": "forward"
+        },
+        {
+          "name": "himoe.regularizer_softmax_gradient",
+          "kind": "multiply",
+          "elements": 770048,
+          "calls": 16,
+          "phase": "backward"
+        },
+        {
+          "name": "himoe.regularizer_softmax_gradient_sum",
+          "kind": "add",
+          "elements": 376832,
+          "calls": 16,
+          "phase": "backward"
+        },
+        {
+          "name": "himoe.regularizer_softmax_gradient_subtract",
+          "kind": "subtract",
+          "elements": 385024,
+          "calls": 16,
+          "phase": "backward"
+        },
+        {
+          "name": "himoe.inter_square_gradient",
+          "kind": "multiply",
+          "elements": 65536,
+          "calls": 16,
+          "phase": "backward"
+        },
+        {
+          "name": "himoe.intra_square_gradient",
+          "kind": "multiply",
+          "elements": 770048,
+          "calls": 16,
+          "phase": "backward"
+        },
+        {
+          "name": "himoe.router_gradient_merge",
+          "kind": "add",
+          "elements": 770048,
+          "calls": 16,
+          "phase": "backward"
         }
       ],
       "components": {
@@ -1766,7 +2243,7 @@
         "attention_core": 3298534883328,
         "active_expert_projections": 2473901162496,
         "lm_head": 618475290624,
-        "router_supplement": 20766788600
+        "router_supplement": 20879250632
       },
       "scalar_costs": {
         "exp": 1,
@@ -1808,9 +2285,9 @@
       "first_step": 1,
       "last_step": 2631,
       "steps": 2631,
-      "flops_per_update": 570006148873216,
-      "flops": 1499686177685431296,
-      "cumulative_flops": 1499686177685431296
+      "flops_per_update": 570020544013312,
+      "flops": 1499724051299023872,
+      "cumulative_flops": 1499724051299023872
     },
     {
       "stage": "medium",
@@ -1823,9 +2300,9 @@
       "first_step": 2632,
       "last_step": 3519,
       "steps": 888,
-      "flops_per_update": 675559265139712,
-      "flops": 599896627444064256,
-      "cumulative_flops": 2099582805129495552
+      "flops_per_update": 675573660279808,
+      "flops": 599909410328469504,
+      "cumulative_flops": 2099633461627493376
     },
     {
       "stage": "full",
@@ -1838,9 +2315,9 @@
       "first_step": 3520,
       "last_step": 4534,
       "steps": 1015,
-      "flops_per_update": 886665497672704,
-      "flops": 899965480137794560,
-      "cumulative_flops": 2999548285267290112
+      "flops_per_update": 886679892812800,
+      "flops": 899980091204992000,
+      "cumulative_flops": 2999613552832485376
     }
   ]
 }

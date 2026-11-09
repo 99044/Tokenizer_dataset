@@ -8,12 +8,15 @@ from torch import nn
 from torch.nn.attention import SDPBackend, sdpa_kernel
 from transformers import AutoModelForCausalLM, Qwen3MoeConfig
 
+from hf_qwen3_himoe import Qwen3HiMoeForCausalLM, grouped_topk
+
 
 class Qwen3MoeTrainingConfig:
     def __init__(self, hf_config):
         # Transformers may insert defaults into its input mapping. Preserve the
         # declared architecture verbatim for family checks and exact resumes.
         self.hf = Qwen3MoeConfig.from_dict(deepcopy(hf_config))
+        self.hf._attn_implementation = "sdpa"
         self.init_seed = None
 
     def build(self, init_device="cpu"):
@@ -21,6 +24,7 @@ class Qwen3MoeTrainingConfig:
             torch.manual_seed(self.init_seed)
         with torch.device(init_device):
             return Qwen3MoeTrainingModel(
+                Qwen3HiMoeForCausalLM(self.hf) if getattr(self.hf, "hi_moe", None) else
                 AutoModelForCausalLM.from_config(self.hf, attn_implementation="sdpa")
             )
 
@@ -36,6 +40,9 @@ class Qwen3MoeTrainingModel(nn.Module):
         rotary = self.lm.model.rotary_emb
         inv_freq = rotary.inv_freq
         self.to(device=device, dtype=torch.bfloat16)
+        if getattr(self.lm.config, "hi_moe", None):
+            for layer in self.lm.model.layers:
+                layer.mlp.gate.himoe_logits_ema = layer.mlp.gate.himoe_logits_ema.float()
         rotary.inv_freq = inv_freq.to(device=device, dtype=torch.float32)
         rotary.original_inv_freq = rotary.inv_freq.clone()
 
@@ -66,6 +73,7 @@ class AccumulatedRouterBalance:
     def __init__(self, config, device):
         self.top_k = config.num_experts_per_tok
         self.num_experts = config.num_experts
+        self.himoe = getattr(config, "hi_moe", None)
         self.counts = torch.zeros(
             config.num_hidden_layers, self.num_experts, device=device, dtype=torch.int64,
         )
@@ -81,7 +89,11 @@ class AccumulatedRouterBalance:
             probabilities = logits.float().softmax(dim=-1)
             probability_means.append(probabilities.mean(dim=0))
             with torch.no_grad():
-                indices = probabilities.topk(self.top_k, dim=-1).indices.flatten()
+                if self.himoe:
+                    indices = grouped_topk(probabilities, self.himoe["groups"],
+                                           self.himoe["per_group"])[1].flatten()
+                else:
+                    indices = probabilities.topk(self.top_k, dim=-1).indices.flatten()
                 counts[layer].scatter_add_(0, indices, torch.ones_like(indices))
         if self.world_size > 1:
             dist.all_reduce(counts)
@@ -103,3 +115,28 @@ class AccumulatedRouterBalance:
             "train/router_load_median_ratio": percentiles[1].item(),
             "train/router_zero_experts": (self.counts == 0).sum().item(),
         }
+
+
+def himoe_regularizers(router_logits, settings):
+    """FP32 inter-group load and intra-group specialization terms."""
+    inter, intra = [], []
+    for logits in router_logits:
+        probabilities = logits.float().softmax(dim=-1)
+        selected, _ = grouped_topk(probabilities, settings["groups"], settings["per_group"])
+        inter.append(selected.square().sum(dim=-1).mean())
+        intra.append(probabilities.square().sum(dim=-1).mean())
+    return (settings["lambda_inter"] * torch.stack(inter).mean(),
+            -settings["lambda_intra"] * torch.stack(intra).mean())
+
+
+def synchronize_himoe_ema(lm):
+    """Average rank-local router EMAs once per optimizer update."""
+    if not getattr(lm.config, "hi_moe", None) or not dist.is_initialized():
+        return
+    buffers = [layer.mlp.gate.himoe_logits_ema for layer in lm.model.layers]
+    joined = torch.cat(buffers)
+    dist.all_reduce(joined, op=dist.ReduceOp.SUM)
+    joined.div_(dist.get_world_size())
+    for buffer, mean in zip(buffers, joined.split([item.numel() for item in buffers])):
+        buffer.copy_(mean)
+

@@ -256,8 +256,14 @@ def export_checkpoint(args):
         if value.dtype != expected_dtype:
             raise ValueError(f'checkpoint weight {name} has dtype {value.dtype}, expected {expected_dtype}')
     with torch.device('meta'):
-        hf = AutoModelForCausalLM.from_config(hf_config, dtype=torch.bfloat16,
-                                             attn_implementation='sdpa')
+        if qwen_moe and getattr(hf_config, 'hi_moe', None):
+            from hf_qwen3_himoe import Qwen3HiMoeForCausalLM
+
+            hf_config._attn_implementation = 'sdpa'
+            hf = Qwen3HiMoeForCausalLM(hf_config)
+        else:
+            hf = AutoModelForCausalLM.from_config(hf_config, dtype=torch.bfloat16,
+                                                 attn_implementation='sdpa')
     hf.load_state_dict(converted, strict=True, assign=True)
     hf.tie_weights()
     hf.generation_config = GenerationConfig(
@@ -275,7 +281,7 @@ def export_checkpoint(args):
         'dtype': ('bfloat16_with_fp32_gdn_norms_and_residual_mixing'
                   if hybrid and getattr(hf_config, 'dual_residual', None)
                   else 'bfloat16_with_fp32_gdn_norms' if hybrid else 'bfloat16'),
-        'trust_remote_code_required': hybrid,
+        'trust_remote_code_required': hybrid or (qwen_moe and getattr(hf_config, 'hi_moe', None) is not None),
         'validation_reference': (
             'native_qwen3_moe' if qwen_moe else
             'unfused_native_cpu_recurrence' if cpu_reference else 'native_olmo_core'
@@ -297,7 +303,9 @@ def export_checkpoint(args):
         record['tokenizer_validation'] = validate_tokenizer(tokenizer, args.output_dir)
         del hf, converted, native_state, checkpoint
         gc.collect()
-        hf, record['offline_weight_loading'] = load_offline_model(args.output_dir, trust_remote_code=hybrid)
+        hf, record['offline_weight_loading'] = load_offline_model(
+            args.output_dir, trust_remote_code=hybrid or (qwen_moe and getattr(hf_config, 'hi_moe', None) is not None)
+        )
         expected_state = convert_state_to_hf(hf_config, core.state_dict())
         loaded_state = hf.state_dict()
         for name, expected in expected_state.items():

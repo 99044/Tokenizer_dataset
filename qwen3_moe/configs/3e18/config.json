@@ -1,6 +1,6 @@
 {
   "architectures": [
-    "Qwen3MoeForCausalLM"
+    "Qwen3HiMoeForCausalLM"
   ],
   "model_type": "qwen3_moe",
   "vocab_size": 24576,
@@ -31,5 +31,14 @@
   "bos_token_id": 1,
   "eos_token_id": 2,
   "pad_token_id": 3,
-  "router_z_loss_coef": 0.001
+  "router_z_loss_coef": 0.001,
+  "hi_moe": {
+    "groups": 4,
+    "per_group": 1,
+    "temperature": 1.0,
+    "lambda_intra": 0.1,
+    "lambda_inter": 0.05,
+    "bias_strength": 0.01,
+    "ema_decay": 0.9
+  }
 }

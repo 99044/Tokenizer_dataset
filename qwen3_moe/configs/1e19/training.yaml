@@ -1,12 +1,12 @@
 run:
-  name: qwen3_moe_1e19_e94_k8_soap
+  name: qwen3_himoe_1e19_e94_k8_soap
   seed: 42
 model:
   type: qwen3_moe
   context_length: 8192
   hf_config:
     architectures:
-    - Qwen3MoeForCausalLM
+    - Qwen3HiMoeForCausalLM
     model_type: qwen3_moe
     vocab_size: 24576
     hidden_size: 768
@@ -37,6 +37,14 @@ model:
     eos_token_id: 2
     pad_token_id: 3
     router_z_loss_coef: 0.001
+    hi_moe:
+      groups: 4
+      per_group: 2
+      temperature: 1.0
+      lambda_intra: 0.1
+      lambda_inter: 0.05
+      bias_strength: 0.01
+      ema_decay: 0.9
 training:
   dtype: bfloat16
   max_steps: 5375
@@ -51,13 +59,13 @@ training:
     reference:
       context_length: 8192
       max_steps: 4242
-      planned_training_flops: 9999111264441470976
+      planned_training_flops: 9999294884008034304
       planned_training_tokens: 4448059392
-      flops_per_token_numerator: 1150961467961
-      flops_per_token_denominator: 512
-      warmup_steps: 85
-      cooldown_steps: 848
-      final_lr_ratio: 0.0
+      flops_per_token_numerator: 35968206367
+      flops_per_token_denominator: 16
+      warmup_steps: 212
+      cooldown_steps: 1273
+      final_lr_ratio: 0.01
     stages:
     - stage: short
       stage_index: 0
@@ -69,9 +77,9 @@ training:
       first_step: 1
       last_step: 3040
       steps: 3040
-      flops_per_update: 1644685551585280
-      flops: 4999844076819251200
-      cumulative_flops: 4999844076819251200
+      flops_per_update: 1644728837668864
+      flops: 4999975666513346560
+      cumulative_flops: 4999975666513346560
     - stage: medium
       stage_index: 1
       length: 4096
@@ -82,9 +90,9 @@ training:
       first_step: 3041
       last_step: 4102
       steps: 1062
-      flops_per_update: 1882180063184896
-      flops: 1998875227102359552
-      cumulative_flops: 6998719303921610752
+      flops_per_update: 1882223349268480
+      flops: 1998921196923125760
+      cumulative_flops: 6998896863436472320
     - stage: full
       stage_index: 2
       length: 8192
@@ -95,13 +103,13 @@ training:
       first_step: 4103
       last_step: 5375
       steps: 1273
-      flops_per_update: 2357169086384128
-      flops: 3000676246966994944
-      cumulative_flops: 9999395550888605696
+      flops_per_update: 2357212372467712
+      flops: 3000731350151397376
+      cumulative_flops: 9999628213587869696
     max_steps: 5375
-    planned_training_flops: 9999395550888605696
+    planned_training_flops: 9999628213587869696
     planned_training_tokens: 5636096000
-    unused_reference_flops: 604449111394304
+    unused_reference_flops: 371786412130304
     accounting:
       kind: scicomp26-megatron-qwen3-moe-router-zloss-v2
       official_ledger: false
@@ -133,11 +141,11 @@ optimizer:
   max_precond_dim: 1024
 scheduler:
   name: linear_cooldown
-  warmup_steps: 122
-  cooldown_steps: 849
-  final_lr_ratio: 0.0
-  warmup_fraction: 0.020037718057520037
-  cooldown_fraction: 0.1999057048561999
+  warmup_steps: 304
+  cooldown_steps: 1274
+  final_lr_ratio: 0.01
+  warmup_fraction: 0.04997642621404998
+  cooldown_fraction: 0.3000942951438001
 data:
   format: npy_packed_tokens
   tokenizer_json_sha256: 6f1812b3fbf8758220be646974072ef08c66df2d2d5ef9d398f0e158b9ee947c
@@ -147,10 +155,10 @@ scaling:
   flops_accounting: scicomp26-megatron-qwen3-moe-router-zloss-v2
 budget:
   total_training_flops: 10000000000000000000
-  planned_training_flops: 9999395550888605696
+  planned_training_flops: 9999628213587869696
   planned_training_tokens: 5636096000
-  flops_per_token_numerator: 1150961467961
-  flops_per_token_denominator: 512
+  flops_per_token_numerator: 35968206367
+  flops_per_token_denominator: 16
   flops_protocol: scicomp26-megatron-qwen3-moe-router-zloss-v2
   flops_per_token_basis: 8192-token reference; use curriculum stage costs at runtime
 submission:
@@ -201,12 +209,15 @@ architecture_family:
     connections: pre-norm residual attention followed by residual routed FFN
     activation: SwiGLU
     position_encoding: RoPE, theta=1000000
-    routing: dropless token-choice softmax/top-k with renormalized selected weights;
-      K follows the declared size rule
+    routing: group-local Top-K with FP32 router EMA correction and renormalized selected
+      weights; K follows the declared size rule
+    routing_objective: standard expert balance plus Hi-MoE inter-group and intra-group
+      regularizers
     shared_experts: 0
   transformers_version: 5.18.0
-  model_code_sha256: 4f197b68ed8472a0d5d2916a729559edb20c849c5b40597c0e1a24b7279d126c
+  model_code_sha256: 06bfa45919189a855cd501695de4d605d0bc457c90749bd0d9300de023111ce8
+  himoe_code_sha256: 46e0e3efcd70558224a3ed42a7a86452089410cc103399541b54cda238f6edb0
   acceleration_code_sha256: 1902de1e99b1a324229757850ddd45c172f9e37019177e2b214fa1d7060c396f
   base_config_sha256: 4bc0edba5da131c13990e9da2a3dc970726a3c21eb8a24aee747dad824daeec7
-  generation_code_sha256: 12355112c4d291e50b277282a2cc2801023cc577990b8a3dfcac32d10b18424b
-  family_id: 109b0c3dac22760311c367617b8e37ecca65dfcbf865e20b512b07ba662afe88
+  generation_code_sha256: 0a6e86a720738d7ea8ff53136015e3e3a585f78a03f28a2e4fe347dc7832ce80
+  family_id: 143f82292e736d10be9b057294602fb632d119363255e37c3cac46b7e91510cd

@@ -1,12 +1,12 @@
 run:
-  name: qwen3_moe_3e17_e24_k2_soap
+  name: qwen3_himoe_3e17_e24_k2_soap
   seed: 42
 model:
   type: qwen3_moe
   context_length: 8192
   hf_config:
     architectures:
-    - Qwen3MoeForCausalLM
+    - Qwen3HiMoeForCausalLM
     model_type: qwen3_moe
     vocab_size: 24576
     hidden_size: 256
@@ -37,9 +37,17 @@ model:
     eos_token_id: 2
     pad_token_id: 3
     router_z_loss_coef: 0.001
+    hi_moe:
+      groups: 2
+      per_group: 1
+      temperature: 1.0
+      lambda_intra: 0.1
+      lambda_inter: 0.05
+      bias_strength: 0.01
+      ema_decay: 0.9
 training:
   dtype: bfloat16
-  max_steps: 8716
+  max_steps: 8715
   micro_batch_size: 1
   gradient_accumulation_steps: 4
   gradient_checkpointing: false
@@ -51,13 +59,13 @@ training:
     reference:
       context_length: 8192
       max_steps: 6155
-      planned_training_flops: 299988670963010560
+      planned_training_flops: 299994298951623680
       planned_training_tokens: 1613496320
-      flops_per_token_numerator: 47596699673
+      flops_per_token_numerator: 47597592619
       flops_per_token_denominator: 256
-      warmup_steps: 123
-      cooldown_steps: 1231
-      final_lr_ratio: 0.0
+      warmup_steps: 308
+      cooldown_steps: 1846
+      final_lr_ratio: 0.01
     stages:
     - stage: short
       stage_index: 0
@@ -69,9 +77,9 @@ training:
       first_step: 1
       last_step: 5181
       steps: 5181
-      flops_per_update: 28947811165184
-      flops: 149978609646818304
-      cumulative_flops: 149978609646818304
+      flops_per_update: 28948725541888
+      flops: 149983347032521728
+      cumulative_flops: 149983347032521728
     - stage: medium
       stage_index: 1
       length: 4096
@@ -80,11 +88,11 @@ training:
       tokens_per_update: 262144
       requested_flops_fraction: 0.2
       first_step: 5182
-      last_step: 6869
-      steps: 1688
-      flops_per_update: 35544880931840
-      flops: 59999759012945920
-      cumulative_flops: 209978368659764224
+      last_step: 6868
+      steps: 1687
+      flops_per_update: 35545795308544
+      flops: 59965756685513728
+      cumulative_flops: 209949103718035456
     - stage: full
       stage_index: 2
       length: 8192
@@ -92,16 +100,16 @@ training:
       grad_accum_steps: 4
       tokens_per_update: 262144
       requested_flops_fraction: 0.3
-      first_step: 6870
-      last_step: 8716
+      first_step: 6869
+      last_step: 8715
       steps: 1847
-      flops_per_update: 48739020465152
-      flops: 90020970799135744
-      cumulative_flops: 299999339458899968
-    max_steps: 8716
-    planned_training_flops: 299999339458899968
-    planned_training_tokens: 2284847104
-    unused_reference_flops: 660541100032
+      flops_per_update: 48739934841856
+      flops: 90022659652908032
+      cumulative_flops: 299971763370943488
+    max_steps: 8715
+    planned_training_flops: 299971763370943488
+    planned_training_tokens: 2284584960
+    unused_reference_flops: 28236629056512
     accounting:
       kind: scicomp26-megatron-qwen3-moe-router-zloss-v2
       official_ledger: false
@@ -133,11 +141,11 @@ optimizer:
   max_precond_dim: 1024
 scheduler:
   name: linear_cooldown
-  warmup_steps: 208
-  cooldown_steps: 1232
-  final_lr_ratio: 0.0
-  warmup_fraction: 0.01998375304630382
-  cooldown_fraction: 0.2
+  warmup_steps: 519
+  cooldown_steps: 1846
+  final_lr_ratio: 0.01
+  warmup_fraction: 0.050040617384240454
+  cooldown_fraction: 0.2999187652315191
 data:
   format: npy_packed_tokens
   tokenizer_json_sha256: 6f1812b3fbf8758220be646974072ef08c66df2d2d5ef9d398f0e158b9ee947c
@@ -147,9 +155,9 @@ scaling:
   flops_accounting: scicomp26-megatron-qwen3-moe-router-zloss-v2
 budget:
   total_training_flops: 300000000000000000
-  planned_training_flops: 299999339458899968
-  planned_training_tokens: 2284847104
-  flops_per_token_numerator: 47596699673
+  planned_training_flops: 299971763370943488
+  planned_training_tokens: 2284584960
+  flops_per_token_numerator: 47597592619
   flops_per_token_denominator: 256
   flops_protocol: scicomp26-megatron-qwen3-moe-router-zloss-v2
   flops_per_token_basis: 8192-token reference; use curriculum stage costs at runtime
@@ -160,20 +168,20 @@ logging:
   eval_batches: 8
   final_eval_batches: 64
   checkpoint_keep_last: 2
-  eval_every_steps: 8716
-  checkpoint_every_steps: 8716
+  eval_every_steps: 8715
+  checkpoint_every_steps: 8715
   checkpoint_steps: &id001
   - 5181
-  - 6869
-  - 7054
-  - 7238
-  - 7423
-  - 7608
-  - 7793
-  - 7977
-  - 8162
-  - 8347
-  - 8531
+  - 6868
+  - 7053
+  - 7237
+  - 7422
+  - 7607
+  - 7792
+  - 7976
+  - 8161
+  - 8346
+  - 8530
   eval_steps: *id001
 architecture_family:
   schema: qwen3-moe-scaling-v2
@@ -201,12 +209,15 @@ architecture_family:
     connections: pre-norm residual attention followed by residual routed FFN
     activation: SwiGLU
     position_encoding: RoPE, theta=1000000
-    routing: dropless token-choice softmax/top-k with renormalized selected weights;
-      K follows the declared size rule
+    routing: group-local Top-K with FP32 router EMA correction and renormalized selected
+      weights; K follows the declared size rule
+    routing_objective: standard expert balance plus Hi-MoE inter-group and intra-group
+      regularizers
     shared_experts: 0
   transformers_version: 5.18.0
-  model_code_sha256: 4f197b68ed8472a0d5d2916a729559edb20c849c5b40597c0e1a24b7279d126c
+  model_code_sha256: 06bfa45919189a855cd501695de4d605d0bc457c90749bd0d9300de023111ce8
+  himoe_code_sha256: 46e0e3efcd70558224a3ed42a7a86452089410cc103399541b54cda238f6edb0
   acceleration_code_sha256: 1902de1e99b1a324229757850ddd45c172f9e37019177e2b214fa1d7060c396f
   base_config_sha256: 4bc0edba5da131c13990e9da2a3dc970726a3c21eb8a24aee747dad824daeec7
-  generation_code_sha256: 12355112c4d291e50b277282a2cc2801023cc577990b8a3dfcac32d10b18424b
-  family_id: 109b0c3dac22760311c367617b8e37ecca65dfcbf865e20b512b07ba662afe88
+  generation_code_sha256: 0a6e86a720738d7ea8ff53136015e3e3a585f78a03f28a2e4fe347dc7832ce80
+  family_id: 143f82292e736d10be9b057294602fb632d119363255e37c3cac46b7e91510cd
