@@ -1,0 +1,153 @@
+run:
+  name: qwen3_moe_a30m_3e17_soap
+  seed: 42
+model:
+  type: qwen3_moe
+  context_length: 8192
+  hf_config:
+    architectures:
+    - Qwen3MoeForCausalLM
+    model_type: qwen3_moe
+    vocab_size: 24576
+    hidden_size: 256
+    num_hidden_layers: 19
+    num_attention_heads: 32
+    num_key_value_heads: 4
+    head_dim: 16
+    max_position_embeddings: 8192
+    rope_theta: 1000000.0
+    rms_norm_eps: 1.0e-06
+    initializer_range: 0.02
+    hidden_act: silu
+    attention_bias: false
+    attention_dropout: 0.0
+    use_sliding_window: false
+    intermediate_size: 768
+    decoder_sparse_step: 1
+    mlp_only_layers: []
+    num_experts: 128
+    num_experts_per_tok: 8
+    moe_intermediate_size: 96
+    norm_topk_prob: true
+    output_router_logits: false
+    router_aux_loss_coef: 0.001
+    tie_word_embeddings: false
+    use_cache: true
+    bos_token_id: 1
+    eos_token_id: 2
+    pad_token_id: 3
+training:
+  dtype: bfloat16
+  max_steps: 1618
+  micro_batch_size: 1
+  gradient_accumulation_steps: 16
+  gradient_checkpointing: false
+  length_curriculum:
+    kind: qwen3_moe_length_fp32
+    version: 1
+    world_size: 4
+    tokens_per_update: 524288
+    reference:
+      context_length: 8192
+      max_steps: 885
+      planned_training_flops: 299879194832962560
+      planned_training_tokens: 463994880
+      flops_per_token_numerator: 330904831869
+      flops_per_token_denominator: 512
+      warmup_steps: 20
+      cooldown_steps: 149
+      final_lr_ratio: 0.0
+    stages:
+    - stage: short
+      stage_index: 0
+      length: 2048
+      micro_batch_size: 4
+      grad_accum_steps: 16
+      tokens_per_update: 524288
+      requested_flops_fraction: 0.5
+      first_step: 1
+      last_step: 1063
+      steps: 1063
+      flops_per_update: 141037532073984
+      flops: 149922896594644992
+      cumulative_flops: 149922896594644992
+    - stage: medium
+      stage_index: 1
+      length: 4096
+      micro_batch_size: 2
+      grad_accum_steps: 16
+      tokens_per_update: 524288
+      requested_flops_fraction: 0.2
+      first_step: 1064
+      last_step: 1352
+      steps: 289
+      flops_per_update: 206973871319040
+      flops: 59815448811202560
+      cumulative_flops: 209738345405847552
+    - stage: full
+      stage_index: 2
+      length: 8192
+      micro_batch_size: 1
+      grad_accum_steps: 16
+      tokens_per_update: 524288
+      requested_flops_fraction: 0.3
+      first_step: 1353
+      last_step: 1618
+      steps: 266
+      flops_per_update: 338846547833856
+      flops: 90133181723805696
+      cumulative_flops: 299871527129653248
+    max_steps: 1618
+    planned_training_flops: 299871527129653248
+    planned_training_tokens: 848297984
+    unused_reference_flops: 128472870346752
+    accounting:
+      kind: qwen3_moe_prediction_graph
+      official_ledger: false
+      limitations: Excludes expert dispatch, top-k selection, language-model and router
+        auxiliary losses, optimizer, communication and activation recomputation.
+  fp32_master_weights: true
+optimizer:
+  name: soap
+  learning_rate: 0.003
+  betas:
+  - 0.95
+  - 0.95
+  eps: 1.0e-08
+  weight_decay: 0.1
+  precondition_frequency: 10
+  max_precond_dim: 1024
+scheduler:
+  name: linear_cooldown
+  warmup_steps: 49
+  cooldown_steps: 149
+  final_lr_ratio: 0.0
+  warmup_fraction: 0.022598870056497175
+  cooldown_fraction: 0.16836158192090395
+data:
+  format: npy_packed_tokens
+  tokenizer_json_sha256: 6f1812b3fbf8758220be646974072ef08c66df2d2d5ef9d398f0e158b9ee947c
+scaling:
+  expected_total_parameters: 198125920
+  tokens_per_update: 524288
+  flops_accounting: qwen3_moe_prediction_graph
+budget:
+  total_training_flops: 300000000000000000
+  planned_training_flops: 299871527129653248
+  planned_training_tokens: 848297984
+  flops_per_token_numerator: 330904831869
+  flops_per_token_denominator: 512
+  flops_per_token_basis: 8192-token reference; use curriculum stage costs at runtime
+submission:
+  budget_tier: 3e17
+  data_parallel_size: 4
+logging:
+  eval_batches: 8
+  final_eval_batches: 64
+  checkpoint_keep_last: 2
+  eval_every_steps: 1618
+  checkpoint_every_steps: 1618
+  checkpoint_steps: &id001
+  - 800
+  - 1600
+  eval_steps: *id001

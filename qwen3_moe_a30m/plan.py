@@ -1,13 +1,14 @@
 """Estimate the 3e17 plan with the existing Qwen3 Dense FLOPs ledger."""
 
 import argparse
+from fractions import Fraction
 import json
 from pathlib import Path
 import sys
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT.parent / "training" / "src"))
-from qwen3_flops import parameters, qwen3_ledger
+from qwen3_flops import parameters, qwen3_moe_cost
 
 TARGET_FLOPS = 3 * 10**17
 
@@ -43,16 +44,7 @@ def make_plan(config, world_size=4, grad_accumulation=16):
     total_breakdown = dict(active_breakdown)
     total_breakdown["swiglu_projections"] = layers * experts * 3 * hidden * expert_width
 
-    ledger = qwen3_ledger(ledger_shape, micro_batch_size=1)
-    dense_ledger_cost = sum(group["forward"] + group["backward"] for group in ledger.values())
-    if not tied_vocab:
-        # The existing Dense ledger includes the tied weights' gradient add.
-        dense_ledger_cost -= embedding_parameters
-    router_projection_cost = 6 * router_parameters * sequence
-    # Explicit planning allowance for softmax, selected-weight normalization,
-    # and weighted combination (forward and backward). Dispatch is runtime work.
-    router_combine_cost = layers * sequence * (32 * (experts + top_k) + (6 * top_k - 2) * hidden)
-    flops_per_microbatch = dense_ledger_cost + router_projection_cost + router_combine_cost
+    flops_per_microbatch, attention_cost = qwen3_moe_cost(config, sequence)
     replicas_per_update = world_size * grad_accumulation
     flops_per_update = flops_per_microbatch * replicas_per_update
     tokens_per_update = sequence * replicas_per_update
@@ -78,10 +70,7 @@ def make_plan(config, world_size=4, grad_accumulation=16):
         "optimizer_updates": steps,
         "planned_training_tokens": steps * tokens_per_update,
         "estimated_training_flops": steps * flops_per_update,
-        "attention_core_and_elementwise_flops_per_microbatch": sum(
-            ledger[name]["forward"] + ledger[name]["backward"]
-            for name in ("layer.attention.core", "layer.attention.elementwise")
-        ),
+        "attention_core_and_elementwise_flops_per_microbatch": attention_cost,
         "accounting": "Logical prediction graph with the existing causal S^2/2 convention",
         "excluded": [
             "expert dispatch and top-k selection",
@@ -91,13 +80,75 @@ def make_plan(config, world_size=4, grad_accumulation=16):
     }
 
 
+def make_training_settings(config, baseline):
+    from context_curriculum import apply_length_curriculum
+
+    seq = config["max_position_embeddings"]
+    per_token = Fraction(baseline["flops_per_microbatch"], seq)
+    full_steps = baseline["optimizer_updates"]
+    settings = {
+        "run": {"name": "qwen3_moe_a30m_3e17_soap", "seed": 42},
+        "model": {"type": "qwen3_moe", "context_length": seq, "hf_config": config},
+        "training": {
+            "dtype": "bfloat16", "max_steps": full_steps,
+            "micro_batch_size": baseline["micro_batch_size"],
+            "gradient_accumulation_steps": baseline["grad_accumulation_steps"],
+            "gradient_checkpointing": False,
+        },
+        "optimizer": {
+            "name": "soap", "learning_rate": 0.003, "betas": [0.95, 0.95],
+            "eps": 1e-8, "weight_decay": 0.1,
+            "precondition_frequency": 10, "max_precond_dim": 1024,
+        },
+        "scheduler": {
+            "name": "linear_cooldown", "warmup_steps": 20,
+            "cooldown_steps": round(full_steps * 432 / 2570), "final_lr_ratio": 0.0,
+        },
+        "data": {
+            "format": "npy_packed_tokens",
+            "tokenizer_json_sha256": "6f1812b3fbf8758220be646974072ef08c66df2d2d5ef9d398f0e158b9ee947c",
+        },
+        "scaling": {
+            "expected_total_parameters": baseline["total_parameters"],
+            "tokens_per_update": baseline["tokens_per_update"],
+        },
+        "budget": {
+            "total_training_flops": TARGET_FLOPS,
+            "planned_training_flops": baseline["estimated_training_flops"],
+            "planned_training_tokens": baseline["planned_training_tokens"],
+            "flops_per_token_numerator": per_token.numerator,
+            "flops_per_token_denominator": per_token.denominator,
+            "flops_per_update": baseline["flops_per_update"],
+        },
+        "submission": {"budget_tier": "3e17", "data_parallel_size": baseline["world_size"]},
+        "logging": {"eval_batches": 8, "final_eval_batches": 64, "checkpoint_keep_last": 2},
+    }
+    apply_length_curriculum(settings)
+    steps = settings["training"]["max_steps"]
+    tokens = settings["budget"]["planned_training_tokens"]
+    if steps <= 1500 or not 800_000_000 <= tokens <= 1_000_000_000:
+        raise ValueError("Qwen3 MoE plan must exceed 1500 steps and process 0.8–1B tokens")
+    milestones = list(range(800, steps, 800))
+    settings["logging"].update(checkpoint_steps=milestones, eval_steps=milestones)
+    return settings
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=ROOT / "config.json")
     parser.add_argument("--world-size", type=int, default=4)
     parser.add_argument("--grad-accumulation", type=int, default=16)
+    parser.add_argument("--write-training-config", type=Path)
     args = parser.parse_args()
     if min(args.world_size, args.grad_accumulation) < 1:
         parser.error("world size and gradient accumulation must be positive")
     config = json.loads(args.config.read_text(encoding="utf-8"))
-    print(json.dumps(make_plan(config, args.world_size, args.grad_accumulation), indent=2))
+    baseline = make_plan(config, args.world_size, args.grad_accumulation)
+    if args.write_training_config:
+        import yaml
+
+        settings = make_training_settings(config, baseline)
+        args.write_training_config.write_text(yaml.safe_dump(settings, sort_keys=False), encoding="utf-8")
+        print(json.dumps(settings["training"]["length_curriculum"], indent=2))
+    else:
+        print(json.dumps(baseline, indent=2))

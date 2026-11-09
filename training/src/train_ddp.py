@@ -211,6 +211,16 @@ def main():
         metadata = json.loads((args.data_dir / 'metadata.json').read_text())
         vocab_size = int(metadata['vocab_size'])
         config, context_length, settings = build_model_config(args.config, vocab_size)
+        is_qwen_moe = settings['model']['type'] == 'qwen3_moe'
+        if is_qwen_moe:
+            from qwen3_moe_training import AccumulatedRouterBalance
+            from training_data import PACKED_FORMAT, normalize_data_metadata
+
+            if metadata.get('format') != PACKED_FORMAT:
+                raise ValueError('Qwen3 MoE requires the native NPY token and text-mask cache')
+            normalize_data_metadata(metadata, context_length)
+            if metadata['tokenizer']['tokenizer_json_sha256'] != settings['data']['tokenizer_json_sha256']:
+                raise ValueError('Qwen3 MoE tokenizer identity differs from the training cache')
         if metadata['context_length'] != context_length:
             raise ValueError('数据 context_length 与模型配置不一致')
         validate_curriculum(
@@ -228,7 +238,8 @@ def main():
         model = config.build(init_device='cpu')
         model.init_weights(max_seq_len=context_length, device=device)
         initialization_repairs = repair_zero_gdn_decay_rates(model)
-        tie_output_weights(model)
+        if not is_qwen_moe:
+            tie_output_weights(model)
         scaled_parameters = scale_projections(
             model, float(settings.get('initialization', {}).get('projection_scale', 1.0))
         )
@@ -368,9 +379,15 @@ def main():
         if resumed_rng:
             torch.set_rng_state(resumed_rng['cpu'])
             torch.cuda.set_rng_state(resumed_rng['cuda'], device=device)
-        train = PackedTokenSampler(args.data_dir / 'train.npy', context_length, vocab_size, seed + rank, metadata)
+        train = PackedTokenSampler(
+            args.data_dir / 'train.npy', context_length, vocab_size, seed + rank, metadata,
+            mask_text=is_qwen_moe,
+        )
         train_samplers = {context_length: train}
-        validation = PackedTokenSampler(args.data_dir / 'validation.npy', context_length, vocab_size, seed + rank, metadata)
+        validation = PackedTokenSampler(
+            args.data_dir / 'validation.npy', context_length, vocab_size, seed + rank, metadata,
+            mask_text=is_qwen_moe,
+        )
         global_batch = world * args.micro_batch_size * args.grad_accum_steps
         tokens_per_step = global_batch * context_length
         expected_tokens_per_step = settings.get('experiment', {}).get(
@@ -460,8 +477,10 @@ def main():
         recovery_steps = settings['training'].get('gdn_fp32_recovery_steps', 16)
         if isinstance(recovery_steps, bool) or not isinstance(recovery_steps, int) or recovery_steps < 1:
             raise ValueError('training.gdn_fp32_recovery_steps must be a positive integer')
-        gdn_guard = install_gdn_stability_guard(args.output_dir, rank, force_fp32_gdn)
-        if rank == 0:
+        gdn_guard = None if is_qwen_moe else install_gdn_stability_guard(
+            args.output_dir, rank, force_fp32_gdn,
+        )
+        if rank == 0 and gdn_guard is not None:
             print(f'GDN recurrence precision: {"fp32" if force_fp32_gdn else "model_dtype_with_fallback"}; '
                   f'fp32_retry_grad_norm={retry_threshold}; fp32_recovery_steps={recovery_steps}', flush=True)
         fp32_recovery_until = 0
@@ -475,6 +494,7 @@ def main():
             if sequence_length not in train_samplers:
                 train_samplers[sequence_length] = PackedTokenSampler(
                     args.data_dir / 'train.npy', sequence_length, vocab_size, seed + rank, metadata,
+                    mask_text=is_qwen_moe,
                 )
             train = train_samplers[sequence_length]
             used_lr = float(optimizer.param_groups[0]['lr'])
@@ -488,18 +508,30 @@ def main():
                     # The retry must use the same tokens and stochastic model state.
                     torch.set_rng_state(step_cpu_rng)
                     torch.cuda.set_rng_state(step_cuda_rng, device=device)
-                gdn_guard.force_fp32 = fp32_step
+                if gdn_guard is not None:
+                    gdn_guard.force_fp32 = fp32_step
                 # Sampling positions are reproducible from seed/step/rank.
                 train.rng = np.random.default_rng(np.random.SeedSequence([seed, step, rank]))
                 optimizer.zero_grad(set_to_none=True)
                 local_loss = torch.zeros((), device=device)
+                balance = AccumulatedRouterBalance(model.lm.config, device) if is_qwen_moe else None
+                local_aux = torch.zeros_like(local_loss) if is_qwen_moe else None
                 for micro_step in range(grad_accum_steps):
-                    gdn_guard.set_context(step, micro_step)
+                    if gdn_guard is not None:
+                        gdn_guard.set_context(step, micro_step)
                     sync = micro_step == grad_accum_steps - 1
                     with nullcontext() if sync else ddp.no_sync():
                         inputs, labels = train.batch(micro_batch_size, device)
-                        logits = ddp(inputs)
+                        if balance is None:
+                            logits = ddp(inputs)
+                        else:
+                            logits, router_logits = ddp(inputs, route=True)
                         loss = F.cross_entropy(logits.float().reshape(-1, vocab_size), labels.reshape(-1))
+                        if balance is not None:
+                            aux = balance(router_logits)
+                            loss = loss + model.lm.config.router_aux_loss_coef * aux
+                            local_aux += aux.detach() / grad_accum_steps
+                            del router_logits, aux
                         (loss / grad_accum_steps).backward()
                         local_loss += loss.detach() / grad_accum_steps
                     del inputs, labels, logits, loss
@@ -535,7 +567,8 @@ def main():
                                             local_loss, used_lr, 'fp32' if fp32_step else 'model_dtype',
                                             action)
                 break
-            gdn_guard.force_fp32 = force_fp32_gdn
+            if gdn_guard is not None:
+                gdn_guard.force_fp32 = force_fp32_gdn
             optimizer.step()
             if ema is not None:
                 ema.update(step)
@@ -558,6 +591,13 @@ def main():
                 'system/max_memory_allocated_bytes': torch.cuda.max_memory_allocated(device),
                 'system/max_memory_reserved_bytes': torch.cuda.max_memory_reserved(device),
             }
+            if balance is not None:
+                dist.all_reduce(local_aux)
+                mean_aux = (local_aux / world).item()
+                metrics['train/router_aux_loss'] = mean_aux
+                metrics['train/token_nll'] = mean_loss - model.lm.config.router_aux_loss_coef * mean_aux
+                if rank == 0:
+                    metrics.update(balance.metrics())
             for index, group in enumerate(optimizer_report['groups']):
                 metrics[f"lr/{group['name']}"] = used_group_lrs[index]
             stage_boundary = False

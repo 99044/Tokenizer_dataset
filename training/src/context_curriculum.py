@@ -36,8 +36,72 @@ def _integer(value, name, minimum=1):
     return value
 
 
+def _build_qwen3_moe_curriculum(settings, reference):
+    from qwen3_flops import qwen3_moe_cost
+
+    hf = settings["model"]["hf_config"]
+    world = _integer(settings["submission"]["data_parallel_size"], "data_parallel_size")
+    tokens = _integer(settings["scaling"]["tokens_per_update"], "tokens_per_update")
+    budget = _integer(settings["budget"]["total_training_flops"], "total_training_flops")
+    context = reference["context_length"]
+    if context != 8192 or hf["max_position_embeddings"] != context or tokens % (world * context):
+        raise ValueError("Qwen3 MoE curriculum requires an 8192 context and whole batches")
+    accumulation = tokens // (world * context)
+    full_cost, _ = qwen3_moe_cost(hf, context)
+    full_update = full_cost * world * accumulation
+    full_steps = budget // full_update
+    if (
+        Fraction(reference["flops_per_token_numerator"], reference["flops_per_token_denominator"])
+        != Fraction(full_cost, context)
+        or reference["max_steps"] != full_steps
+        or reference["planned_training_flops"] != full_steps * full_update
+        or reference["planned_training_tokens"] != full_steps * tokens
+    ):
+        raise ValueError("Qwen3 MoE full-length FLOPs reference disagrees with its ledger")
+    if not 0 <= reference["warmup_steps"] < full_steps or not 0 < reference["cooldown_steps"] < full_steps:
+        raise ValueError("Invalid Qwen3 MoE reference scheduler")
+    if reference["warmup_steps"] + reference["cooldown_steps"] > full_steps:
+        raise ValueError("Qwen3 MoE warmup and cooldown overlap")
+    if not 0 <= reference["final_lr_ratio"] <= 1:
+        raise ValueError("Invalid Qwen3 MoE final LR ratio")
+
+    stages = []
+    steps = completed = 0
+    for index, (name, length, fraction) in enumerate(STAGES):
+        micro_batch_size = context // length
+        micro_cost, _ = qwen3_moe_cost(hf, length)
+        update_cost = micro_cost * micro_batch_size * world * accumulation
+        allocation = budget * fraction if index < len(STAGES) - 1 else budget - completed
+        count = int(allocation // update_cost)
+        if count < 1:
+            raise ValueError("Every Qwen3 MoE curriculum stage needs a complete update")
+        flops = count * update_cost
+        stages.append(dict(
+            stage=name, stage_index=index, length=length, micro_batch_size=micro_batch_size,
+            grad_accum_steps=accumulation, tokens_per_update=tokens,
+            requested_flops_fraction=float(fraction), first_step=steps + 1,
+            last_step=steps + count, steps=count, flops_per_update=update_cost,
+            flops=flops, cumulative_flops=completed + flops,
+        ))
+        steps += count
+        completed += flops
+    return dict(
+        kind="qwen3_moe_length_fp32", version=1, world_size=world, tokens_per_update=tokens,
+        reference=dict(reference), stages=stages, max_steps=steps,
+        planned_training_flops=completed, planned_training_tokens=steps * tokens,
+        unused_reference_flops=budget - completed,
+        accounting=dict(
+            kind="qwen3_moe_prediction_graph",
+            official_ledger=False,
+            limitations="Excludes expert dispatch, top-k selection, language-model and router auxiliary losses, optimizer, communication and activation recomputation.",
+        ),
+    )
+
+
 def _build_curriculum(settings, reference):
     model = settings["model"]
+    if model["type"] == "qwen3_moe":
+        return _build_qwen3_moe_curriculum(settings, reference)
     tier = settings["submission"]["budget_tier"]
     if tier not in {"3e17", "1e18", "3e18", "1e19"}:
         raise ValueError("Unsupported length + FP32 curriculum tier")

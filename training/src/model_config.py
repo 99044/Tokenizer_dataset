@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
-from olmo_core.config import DType
-from olmo_core.nn.transformer import TransformerConfig
-from olmo_core.nn.transformer.config import TransformerBlockType
+if TYPE_CHECKING:
+    from olmo_core.nn.transformer import TransformerConfig
+    from qwen3_moe_training import Qwen3MoeTrainingConfig
 
 from dual_residual import validate_dual_residual_spec
 from value_residual import validate_value_residual_spec
@@ -21,10 +21,23 @@ def load_settings(config_path: Path) -> dict[str, Any]:
 
 def build_model_config(
     config_path: Path, vocab_size: int
-) -> tuple[TransformerConfig, int, dict[str, Any]]:
+) -> tuple[TransformerConfig | Qwen3MoeTrainingConfig, int, dict[str, Any]]:
     settings = load_settings(config_path)
     model = settings["model"]
     training = settings["training"]
+    if model["type"] == "qwen3_moe":
+        from qwen3_moe_training import Qwen3MoeTrainingConfig
+
+        hf = model["hf_config"]
+        if hf["vocab_size"] != vocab_size or hf["max_position_embeddings"] != model["context_length"]:
+            raise ValueError("Qwen3 MoE vocabulary or context disagrees with the training configuration")
+        if training["dtype"] != "bfloat16" or training.get("gradient_checkpointing", False):
+            raise ValueError("This Qwen3 MoE ledger requires BF16 without activation recomputation")
+        return Qwen3MoeTrainingConfig(hf), model["context_length"], settings
+    from olmo_core.config import DType
+    from olmo_core.nn.transformer import TransformerConfig
+    from olmo_core.nn.transformer.config import TransformerBlockType
+
     dual_residual = validate_dual_residual_spec(
         model.get("dual_residual"), num_layers=model["num_layers"]
     )
@@ -118,6 +131,10 @@ def _build_olmo_hybrid(
     The sequence mixer pattern is three GDN blocks followed by one global
     attention block. Dense SwiGLU feed-forward layers remain in every block.
     """
+
+    from olmo_core.config import DType
+    from olmo_core.nn.transformer import TransformerConfig
+    from olmo_core.nn.transformer.config import TransformerBlockType
 
     fixed_architecture = {
         "activation": "swiglu",

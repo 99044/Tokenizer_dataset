@@ -91,3 +91,28 @@ def qwen3_ledger(model, micro_batch_size):
                for phase in ("forward", "backward")},
         }
     return result
+
+
+def qwen3_moe_cost(config, sequence):
+    """Prediction-graph microbatch FLOPs for one sequence of a routed Qwen3."""
+    layers = config["num_hidden_layers"]
+    hidden = config["hidden_size"]
+    experts = config["num_experts"]
+    top_k = config["num_experts_per_tok"]
+    shape = dict(
+        num_layers=layers, hidden_size=hidden, num_attention_heads=config["num_attention_heads"],
+        num_key_value_heads=config["num_key_value_heads"], attention_head_dim=config["head_dim"],
+        context_length=sequence, vocab_size=config["vocab_size"],
+        intermediate_size=top_k * config["moe_intermediate_size"],
+    )
+    ledger = qwen3_ledger(shape, micro_batch_size=1)
+    dense = sum(group["forward"] + group["backward"] for group in ledger.values())
+    if not config["tie_word_embeddings"]:
+        dense -= config["vocab_size"] * hidden
+    router_projection = 6 * layers * hidden * experts * sequence
+    router_combine = layers * sequence * (32 * (experts + top_k) + (6 * top_k - 2) * hidden)
+    attention = sum(
+        ledger[name]["forward"] + ledger[name]["backward"]
+        for name in ("layer.attention.core", "layer.attention.elementwise")
+    )
+    return dense + router_projection + router_combine, attention

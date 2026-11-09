@@ -11,12 +11,19 @@ from token_cache_validation import ensure_array
 
 class PackedTokenSampler:
     def __init__(self, path: Path, sequence_length: int, vocab_size: int, seed: int,
-                 metadata: Optional[dict] = None) -> None:
+                 metadata: Optional[dict] = None, *, mask_text: bool = False) -> None:
         path = Path(path)
         self.range_verified_from_cache = ensure_array(path, metadata, vocab_size)
         # Reload after a possible validation wait so an old mapping is not
         # retained if another process replaced the file before validation.
         self.tokens = np.load(path, mmap_mode='r', allow_pickle=False)
+        self.is_text = None
+        if mask_text:
+            mask_path = path.with_name(path.stem + '_is_text.npy')
+            ensure_array(mask_path, metadata, vocab_size)
+            self.is_text = np.load(mask_path, mmap_mode='r', allow_pickle=False)
+            if self.is_text.shape != self.tokens.shape:
+                raise ValueError(f'{mask_path} does not align with {path}')
         self.sequence_length = sequence_length
         self.vocab_size = vocab_size
         self.rng = np.random.default_rng(seed)
@@ -37,4 +44,8 @@ class PackedTokenSampler:
         # including when the startup range scan was reused from preprocessing.
         if min(inputs.min(), labels.min()) < 0 or max(inputs.max(), labels.max()) >= self.vocab_size:
             raise ValueError(f'Sampled token ID is outside [0, {self.vocab_size})')
+        if self.is_text is not None:
+            for row, start in enumerate(starts):
+                target_mask = self.is_text[start + 1:start + self.sequence_length + 1]
+                labels[row, target_mask == 0] = -100
         return torch.from_numpy(inputs).to(device), torch.from_numpy(labels).to(device)
