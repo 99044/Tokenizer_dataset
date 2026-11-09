@@ -32,7 +32,7 @@ def build_model_config(
         hf = model["hf_config"]
         validate_moe_activation_ratio(hf)
         if "architecture_family" in settings:
-            from qwen3_moe_token_ladder import validate_qwen3_moe_settings
+            from qwen3_moe_active_ladder import validate_qwen3_moe_settings
 
             validate_qwen3_moe_settings(settings, check_runtime=True)
         if hf["vocab_size"] != vocab_size or hf["max_position_embeddings"] != model["context_length"]:

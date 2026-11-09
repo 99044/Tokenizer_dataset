@@ -19,7 +19,8 @@ from qwen3_moe_flops import PROTOCOL
 from qwen3_moe_rules import (
     HIDDEN_BY_TIER, architecture_for_hidden, make_family,
 )
-from qwen3_moe_token_ladder import make_ladder_architecture, validate_qwen3_moe_settings
+from qwen3_moe_active_ladder import make_active_architecture, validate_qwen3_moe_settings
+from qwen3_moe_token_ladder import make_ladder_architecture
 from qwen3_moe_token_rules import TIER
 
 # Default paper-scaling training presets.
@@ -32,7 +33,7 @@ TIERS = {
 
 
 def make_recipe(tier, *, granularity_shift=0, expert_capacity_fraction=1.0, expert_alignment=1,
-                learning_rate=None, tokens_per_update=None, expert_width=None):
+                learning_rate=None, tokens_per_update=None, expert_width=None, active_variant=None):
     preset = TIERS[tier]
     # Keep each rank's physical micro-batch at 8192 tokens throughout the
     # curriculum. Larger global batches use more accumulation, not more memory.
@@ -48,17 +49,23 @@ def make_recipe(tier, *, granularity_shift=0, expert_capacity_fraction=1.0, expe
     if isinstance(lr, bool) or not math.isfinite(lr) or lr <= 0:
         raise ValueError("learning_rate must be finite and positive")
 
-    if expert_width is None:
+    suffix = ""
+    if expert_width is None and active_variant is None:
         family = make_family(granularity_shift, expert_capacity_fraction, expert_alignment)
         config = architecture_for_hidden(HIDDEN_BY_TIER[tier], family)
     else:
         if tier != TIER or (granularity_shift, expert_capacity_fraction, expert_alignment) != (0, 1, 1):
-            raise ValueError("The 3e17 expert-width sweep uses the fixed paper-scaling router")
-        config, family = make_ladder_architecture(expert_width)
+            raise ValueError("The 3e17 token sweep uses the fixed paper-scaling router")
+        if active_variant is None:
+            config, family = make_ladder_architecture(expert_width)
+            suffix = f"_w{expert_width}"
+        else:
+            if expert_width is not None:
+                raise ValueError("Select an active-parameter variant or an expert width")
+            config, family = make_active_architecture(active_variant)
+            suffix = f"_{active_variant}"
     top_k, experts = config["num_experts_per_tok"], config["num_experts"]
-    run_name = f"qwen3_moe_{tier}_e{experts}_k{top_k}"
-    if expert_width is not None:
-        run_name += f"_w{expert_width}"
+    run_name = f"qwen3_moe_{tier}_e{experts}_k{top_k}{suffix}"
     baseline = make_plan(config, world_size=8, grad_accumulation=accumulation,
                          target_flops=preset["flops"], flops_protocol=PROTOCOL)
     if baseline["optimizer_updates"] < 2:
