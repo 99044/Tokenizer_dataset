@@ -31,7 +31,7 @@ PYTHONPATH="$root/training/src${PYTHONPATH:+:$PYTHONPATH}" \
 from pathlib import Path
 import sys
 import yaml
-from qwen3_moe_token_rules import validate_qwen3_moe_settings
+from qwen3_moe_token_ladder import validate_qwen3_moe_settings
 
 settings = yaml.safe_load(Path(sys.argv[1]).read_text())
 validate_qwen3_moe_settings(settings, check_runtime=True)

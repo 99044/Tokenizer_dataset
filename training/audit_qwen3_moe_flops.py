@@ -12,7 +12,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 from context_curriculum import curriculum_stage, validate_curriculum
 from qwen3_moe_flops import PROTOCOL, REFERENCE_SHA256
-from qwen3_moe_token_rules import validate_qwen3_moe_settings
+from qwen3_moe_token_ladder import validate_qwen3_moe_settings
 
 
 def audit(settings, metrics_path):

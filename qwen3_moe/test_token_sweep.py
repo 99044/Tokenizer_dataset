@@ -1,4 +1,4 @@
-"""Protect the token sweep's single-variable control and compute budget."""
+"""Check the token ladder's spacing, model controls and compute budget."""
 
 from copy import deepcopy
 from pathlib import Path
@@ -8,17 +8,22 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from qwen3_moe.plan import make_recipe
 from context_curriculum import validate_curriculum
-from qwen3_moe_token_rules import EXPERT_WIDTHS, TIER, validate_qwen3_moe_settings
+from qwen3_moe_token_ladder import COMPACT_WIDTH, LADDER_WIDTHS, validate_qwen3_moe_settings
+from qwen3_moe_token_rules import TIER, make_token_architecture
 
 
 class TokenSweepTests(unittest.TestCase):
-    def test_eight_widths_trade_active_parameters_for_tokens_at_fixed_flops(self):
+    def test_eight_sizes_trade_active_parameters_for_tokens_at_fixed_flops(self):
         baseline, baseline_settings, previous = make_recipe(TIER)
-        self.assertEqual(len(EXPERT_WIDTHS), 8)
-        for width in EXPERT_WIDTHS:
+        self.assertEqual(len(LADDER_WIDTHS), 8)
+        gaps = []
+        for width in LADDER_WIDTHS:
             with self.subTest(width=width):
                 config, settings, budget = make_recipe(TIER, expert_width=width)
-                self.assertEqual(config, dict(baseline, moe_intermediate_size=width))
+                expected = dict(baseline, moe_intermediate_size=width)
+                if width == COMPACT_WIDTH:
+                    expected.update(hidden_size=144, intermediate_size=576)
+                self.assertEqual(config, expected)
                 self.assertEqual(settings["optimizer"], baseline_settings["optimizer"])
                 self.assertEqual(settings["data"], baseline_settings["data"])
                 self.assertEqual(budget["tokens_per_update"], 262144)
@@ -36,14 +41,27 @@ class TokenSweepTests(unittest.TestCase):
                 spent = budget["estimated_training_flops"]
                 self.assertLessEqual(spent, 3 * 10**17)
                 self.assertGreater(spent + stages[-1]["flops_per_update"], 3 * 10**17)
+                gap = previous["total_parameters"] - budget["total_parameters"]
+                self.assertGreater(gap, 0)
+                gaps.append(gap)
                 previous = budget
+        self.assertLess(max(gaps) - min(gaps), 2_000_000)
+        self.assertEqual(previous["total_parameters"], 11_975_056)
+
+    def test_previous_width_recipe_is_still_valid(self):
+        config, family = make_token_architecture(64)
+        recipe, settings, budget = make_recipe(TIER, expert_width=64)
+        self.assertEqual(recipe, config)
+        self.assertEqual(settings["architecture_family"], family)
+        self.assertEqual(budget["planned_training_tokens"], 3_111_387_136)
+        validate_qwen3_moe_settings(settings)
 
     def test_non_sweep_configurations_are_rejected(self):
         with self.assertRaisesRegex(ValueError, "one of"):
             make_recipe(TIER, expert_width=512)
         with self.assertRaisesRegex(ValueError, "3e17"):
             make_recipe("1e18", expert_width=64)
-        _, settings, _ = make_recipe(TIER, expert_width=64)
+        _, settings, _ = make_recipe(TIER, expert_width=COMPACT_WIDTH)
         broken = deepcopy(settings)
         broken["model"]["hf_config"]["moe_intermediate_size"] = 128
         with self.assertRaisesRegex(ValueError, "differs"):

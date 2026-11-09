@@ -19,7 +19,8 @@ from qwen3_moe_flops import PROTOCOL
 from qwen3_moe_rules import (
     HIDDEN_BY_TIER, architecture_for_hidden, make_family,
 )
-from qwen3_moe_token_rules import TIER, make_token_architecture, validate_qwen3_moe_settings
+from qwen3_moe_token_ladder import make_ladder_architecture, validate_qwen3_moe_settings
+from qwen3_moe_token_rules import TIER
 
 # Default paper-scaling training presets.
 TIERS = {
@@ -53,7 +54,7 @@ def make_recipe(tier, *, granularity_shift=0, expert_capacity_fraction=1.0, expe
     else:
         if tier != TIER or (granularity_shift, expert_capacity_fraction, expert_alignment) != (0, 1, 1):
             raise ValueError("The 3e17 expert-width sweep uses the fixed paper-scaling router")
-        config, family = make_token_architecture(expert_width)
+        config, family = make_ladder_architecture(expert_width)
     top_k, experts = config["num_experts_per_tok"], config["num_experts"]
     run_name = f"qwen3_moe_{tier}_e{experts}_k{top_k}"
     if expert_width is not None:
