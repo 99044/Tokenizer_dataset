@@ -16,6 +16,8 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 bash qwen3_moe_1e18/run_all.sh \
 
 The pipeline saves native checkpoints every 800 steps and at the final step. It exports `train/step-16955.pt` to `hf-model/`, then evaluates the existing NPY cache at context 8192 and batch size 32. The exported HF directory includes the Python modeling file that preserves the mixed attention pattern. Load that local model with `trust_remote_code=True`.
 
+Cache validation records are shared across runs. For a read-only data mount, keep the run output directories under the same parent or point `TOKEN_CACHE_VALIDATION_DIR` at a persistent writable directory dedicated to that training cache.
+
 Regenerate the configuration with the planner.
 
 ```bash

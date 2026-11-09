@@ -306,7 +306,12 @@ class SOAP(optim.Optimizer):
         """
         Updates the preconditioner matrices and the eigenbases (L, R, Q_L, Q_R in the paper).
         """
-        if state["Q"] is not None:
+        step = state["step"]
+        old_basis = state["Q"]
+        refresh_basis = step > 0 and step % state["precondition_frequency"] == 0
+        # The momentum is already stored in Q's coordinates. Move it only
+        # when those coordinates change, while updating GG on every step.
+        if refresh_basis and old_basis is not None:
             state["exp_avg"] = self.project_back(state["exp_avg"], state, merge_dims=merge_dims, max_precond_dim=max_precond_dim)
         if grad.dim() == 1:
             if precondition_1d and grad.shape[0] <= max_precond_dim:
@@ -333,13 +338,11 @@ class SOAP(optim.Optimizer):
                             )
                         state['GG'][idx].lerp_(outer_product, 1-state['shampoo_beta'])
                      
-        if state['Q'] is None:
+        if old_basis is None:
             state['Q'] = self.get_orthogonal_matrix(state['GG'])
-        if state['step'] > 0 and state['step'] % state['precondition_frequency'] == 0:
+        if refresh_basis:
             state['Q'] = self.get_orthogonal_matrix_QR(state, max_precond_dim, merge_dims)
-            # state['Q'] = self.get_fast_QR(state, max_precond_dim, merge_dims)             
-
-        if state["step"] > 0:
+        if step > 0 and (old_basis is None or refresh_basis):
             state["exp_avg"] = self.project(state["exp_avg"], state, merge_dims=merge_dims, max_precond_dim=max_precond_dim) 
 
     def project_back(self, grad, state, merge_dims=False, max_precond_dim=10000):

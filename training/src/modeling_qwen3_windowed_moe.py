@@ -28,6 +28,13 @@ def _window_mask(attention, args, kwargs):
 
 
 class Qwen3WindowedMoeForCausalLM(Qwen3MoeForCausalLM):
+    @classmethod
+    def _can_set_experts_implementation(cls):
+        # The experts still come from the parent module. Transformers checks
+        # the class's source file, where this attention-only subclass has no
+        # expert implementation decorator of its own.
+        return Qwen3MoeForCausalLM._can_set_experts_implementation()
+
     def __init__(self, config):
         super().__init__(config)
         window = config.local_attention_window

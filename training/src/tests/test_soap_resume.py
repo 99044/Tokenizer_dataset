@@ -49,6 +49,30 @@ class SOAPResumeTests(unittest.TestCase):
         # Loading/updating the restored optimizer must not mutate the checkpoint.
         self.assert_state_equal(saved_before, saved)
 
+    def test_momentum_stays_in_basis_until_qr_refresh(self):
+        torch.manual_seed(23)
+        parameter = torch.nn.Parameter(torch.randn(3, 4, 5))
+        optimizer = SOAP([parameter], precondition_frequency=2, max_precond_dim=16)
+        parameter.grad = torch.randn_like(parameter)
+        optimizer.step()
+        state = optimizer.state[parameter]
+        momentum = state['exp_avg']
+        basis = state['Q']
+        covariances = [value.clone() for value in state['GG']]
+
+        parameter.grad = torch.randn_like(parameter)
+        optimizer.step()
+        self.assertIs(state['exp_avg'], momentum)
+        self.assertIs(state['Q'], basis)
+        self.assertTrue(all(not torch.equal(previous, current)
+                            for previous, current in zip(covariances, state['GG'])))
+
+        parameter.grad = torch.randn_like(parameter)
+        optimizer.step()
+        self.assertIsNot(state['exp_avg'], momentum)
+        self.assertIsNot(state['Q'], basis)
+        self.assertTrue(torch.isfinite(state['exp_avg']).all().item())
+
 
 if __name__ == '__main__':
     unittest.main()
