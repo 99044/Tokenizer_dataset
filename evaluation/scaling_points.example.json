@@ -1,0 +1,9 @@
+{
+  "track": "A",
+  "points": [
+    {"tier": "3e17", "architecture_family_id": null, "actual_training_flops": null, "bpb": null},
+    {"tier": "1e18", "architecture_family_id": null, "actual_training_flops": null, "bpb": null},
+    {"tier": "3e18", "architecture_family_id": null, "actual_training_flops": null, "bpb": null},
+    {"tier": "1e19", "architecture_family_id": null, "actual_training_flops": null, "bpb": null}
+  ]
+}

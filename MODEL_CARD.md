@@ -1,5 +1,16 @@
 # Model Card
 
+The `qwen3-moe` branch adds four unmeasured Qwen3 MoE recipes for 8 x H800.
+They use a 24K vocabulary, homogeneous dropless experts, and FP32-master SOAP
+training. One predeclared rule scales top-k to 2/2/4/8 and expert counts to
+24/24/47/94. Non-vocabulary activation fractions are 10.27%, 10.04%, 10.16%
+and 10.08%. Compute uses the reviewed Megatron reference plus an explicit
+source-derived routing supplement. Architecture, compute plans and launch commands
+are documented in [`qwen3_moe/README.md`](qwen3_moe/README.md). No trained BPB
+improvement is claimed before evaluation.
+
+## Previous hybrid submission models
+
 `submission_1108` defines three OLMo hybrid configurations. Each uses the repeating `[gdn, gdn, gdn, attn]` block pattern, a Dense SwiGLU FFN in each block, and a causal compressed K/V branch beside the final Attention layer. The branch output is added to the original Attention output at the configured scale.
 
 | FLOPs tier | Total parameters | Layers | Hidden / FFN | Tokenizer vocabulary | Optimizer |

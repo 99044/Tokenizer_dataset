@@ -1,5 +1,7 @@
 """Use the stock Qwen3 MoE in the masked-CE DDP runner."""
 
+from copy import deepcopy
+
 import torch
 import torch.distributed as dist
 from torch import nn
@@ -9,7 +11,9 @@ from transformers import AutoModelForCausalLM, Qwen3MoeConfig
 
 class Qwen3MoeTrainingConfig:
     def __init__(self, hf_config):
-        self.hf = Qwen3MoeConfig.from_dict(hf_config)
+        # Transformers may insert defaults into its input mapping. Preserve the
+        # declared architecture verbatim for family checks and exact resumes.
+        self.hf = Qwen3MoeConfig.from_dict(deepcopy(hf_config))
         self.init_seed = None
 
     def build(self, init_device="cpu"):

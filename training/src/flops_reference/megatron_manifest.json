@@ -1,0 +1,11 @@
+{
+  "upstream_url": "https://github.com/NVIDIA/Megatron-LM/blob/main/megatron/training/training.py",
+  "source_kind": "previously reviewed source snapshot matching the repository audit hash",
+  "official_git_commit_pinned_by_rules": false,
+  "function_sha256": "4d6e6daf89926f83f4e5009f337540cf1f16850e1b18d9b1c6cb6fb74b93fc97",
+  "file_sha256": "d4656ef66d8ae04bc96bfa13384aeb6749741107918e724f1032cf2261896fd0",
+  "original_function_lines": [
+    841,
+    1436
+  ]
+}

@@ -1,0 +1,204 @@
+run:
+  name: qwen3_moe_3e18_e47_k4_soap
+  seed: 42
+model:
+  type: qwen3_moe
+  context_length: 8192
+  hf_config:
+    architectures:
+    - Qwen3MoeForCausalLM
+    model_type: qwen3_moe
+    vocab_size: 24576
+    hidden_size: 512
+    num_hidden_layers: 16
+    num_attention_heads: 8
+    num_key_value_heads: 2
+    head_dim: 64
+    max_position_embeddings: 8192
+    rope_theta: 1000000.0
+    rms_norm_eps: 1.0e-06
+    initializer_range: 0.02
+    hidden_act: silu
+    attention_bias: false
+    attention_dropout: 0.0
+    use_sliding_window: false
+    intermediate_size: 2048
+    decoder_sparse_step: 1
+    mlp_only_layers: []
+    num_experts: 47
+    num_experts_per_tok: 4
+    moe_intermediate_size: 512
+    norm_topk_prob: true
+    output_router_logits: false
+    router_aux_loss_coef: 0.001
+    tie_word_embeddings: false
+    use_cache: true
+    bos_token_id: 1
+    eos_token_id: 2
+    pad_token_id: 3
+training:
+  dtype: bfloat16
+  max_steps: 9069
+  micro_batch_size: 1
+  gradient_accumulation_steps: 8
+  gradient_checkpointing: false
+  length_curriculum:
+    kind: qwen3_moe_length_fp32
+    version: 1
+    world_size: 8
+    tokens_per_update: 524288
+    reference:
+      context_length: 8192
+      max_steps: 6766
+      planned_training_flops: 2999570364908822912
+      planned_training_tokens: 3547332608
+      flops_per_token_numerator: 6927030291413
+      flops_per_token_denominator: 8192
+      warmup_steps: 135
+      cooldown_steps: 1353
+      final_lr_ratio: 0.0
+    stages:
+    - stage: short
+      stage_index: 0
+      length: 2048
+      micro_batch_size: 4
+      grad_accum_steps: 8
+      tokens_per_update: 524288
+      requested_flops_fraction: 0.5
+      first_step: 1
+      last_step: 5263
+      steps: 5263
+      flops_per_update: 285000264250688
+      flops: 1499956390751370944
+      cumulative_flops: 1499956390751370944
+    - stage: medium
+      stage_index: 1
+      length: 4096
+      micro_batch_size: 2
+      grad_accum_steps: 8
+      tokens_per_update: 524288
+      requested_flops_fraction: 0.2
+      first_step: 5264
+      last_step: 7039
+      steps: 1776
+      flops_per_update: 337776822383936
+      flops: 599891636553870336
+      cumulative_flops: 2099848027305241280
+    - stage: full
+      stage_index: 2
+      length: 8192
+      micro_batch_size: 1
+      grad_accum_steps: 8
+      tokens_per_update: 524288
+      requested_flops_fraction: 0.3
+      first_step: 7040
+      last_step: 9069
+      steps: 2030
+      flops_per_update: 443329938650432
+      flops: 899959775460376960
+      cumulative_flops: 2999807802765618240
+    max_steps: 9069
+    planned_training_flops: 2999807802765618240
+    planned_training_tokens: 4754767872
+    unused_reference_flops: 192197234381760
+    accounting:
+      kind: scicomp26-megatron-qwen3-moe-router-v1
+      official_ledger: false
+      reference_matched: true
+      router_graph_audited: true
+      scalar_costs:
+        exp: 1
+        divide: 1
+      limitations: Megatron reference plus source-derived routing/auxiliary-loss arithmetic.
+        Exp/divide cost 1 is an explicit convention, not specified by the supplied
+        rule. Ordinary Transformer elementwise/LM-loss terms follow reference exclusions;
+        optimizer, recomputation and communication are excluded. Not organizer certification.
+  fp32_master_weights: true
+optimizer:
+  name: soap
+  learning_rate: 0.0015
+  betas:
+  - 0.95
+  - 0.95
+  eps: 1.0e-08
+  weight_decay: 0.1
+  precondition_frequency: 10
+  max_precond_dim: 1024
+scheduler:
+  name: linear_cooldown
+  warmup_steps: 211
+  cooldown_steps: 1354
+  final_lr_ratio: 0.0
+  warmup_fraction: 0.01995270469997044
+  cooldown_fraction: 0.19997044043748152
+data:
+  format: npy_packed_tokens
+  tokenizer_json_sha256: 6f1812b3fbf8758220be646974072ef08c66df2d2d5ef9d398f0e158b9ee947c
+scaling:
+  expected_total_parameters: 627452416
+  tokens_per_update: 524288
+  flops_accounting: scicomp26-megatron-qwen3-moe-router-v1
+budget:
+  total_training_flops: 3000000000000000000
+  planned_training_flops: 2999807802765618240
+  planned_training_tokens: 4754767872
+  flops_per_token_numerator: 6927030291413
+  flops_per_token_denominator: 8192
+  flops_protocol: scicomp26-megatron-qwen3-moe-router-v1
+  flops_per_token_basis: 8192-token reference; use curriculum stage costs at runtime
+submission:
+  budget_tier: 3e18
+  data_parallel_size: 8
+logging:
+  eval_batches: 8
+  final_eval_batches: 64
+  checkpoint_keep_last: 2
+  eval_every_steps: 9069
+  checkpoint_every_steps: 9069
+  checkpoint_steps: &id001
+  - 5263
+  - 7039
+  - 7242
+  - 7445
+  - 7648
+  - 7851
+  - 8054
+  - 8257
+  - 8460
+  - 8663
+  - 8866
+  eval_steps: *id001
+architecture_family:
+  schema: qwen3-moe-scaling-v2
+  hidden_by_tier:
+    3e17: 256
+    1e18: 384
+    3e18: 512
+    1e19: 768
+  granularity_shift: 0
+  expert_capacity_fraction: 1.0
+  expert_alignment: 1
+  generation_rules:
+    layers: hidden_size // 32
+    attention_heads: hidden_size // 64
+    kv_heads: '2'
+    head_dim: '64'
+    active_ffn_width: 4 * hidden_size
+    top_k: max(2, 2**(hidden_size // 256 + granularity_shift))
+    expert_width: 4 * hidden_size // top_k
+    expert_count: floor(E_max * expert_capacity_fraction / expert_alignment) * expert_alignment
+    E_max: floor((9*A + 10*K*P)/(P - 9*R)); A=always-active non-router/non-vocab params,
+      P=one expert pool, R=one router row across layers
+  fixed_mechanisms:
+    layer_type: stock Qwen3Moe decoder in every layer
+    connections: pre-norm residual attention followed by residual routed FFN
+    activation: SwiGLU
+    position_encoding: RoPE, theta=1000000
+    routing: dropless token-choice softmax/top-k with renormalized selected weights;
+      K follows the declared size rule
+    shared_experts: 0
+  transformers_version: 5.18.0
+  model_code_sha256: 738839f808754853ffaccc810ffa07704c68778756ff0617fe0b541b0c8d61cd
+  base_config_sha256: 4bc0edba5da131c13990e9da2a3dc970726a3c21eb8a24aee747dad824daeec7
+  generation_code_sha256: dbe6a2ba00cc314ff299a6e67e3a232342a15caffbe2550f551de2ebab572ec6
+  family_id: 04d2c5476fd93849511136830a4410ca95d83c3ce620f9dc6375dd7182ceb305

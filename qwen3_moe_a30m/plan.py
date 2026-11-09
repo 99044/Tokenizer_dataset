@@ -1,4 +1,4 @@
-"""Estimate the 3e17 plan with the existing Qwen3 Dense FLOPs ledger."""
+"""Estimate a Qwen3 MoE plan using the shared prediction-graph FLOPs ledger."""
 
 import argparse
 from fractions import Fraction
@@ -8,56 +8,25 @@ import sys
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT.parent / "training" / "src"))
-from qwen3_flops import parameters, qwen3_moe_cost
+from qwen3_flops import qwen3_moe_parameters, qwen3_moe_cost
 
 TARGET_FLOPS = 3 * 10**17
 
 
-def make_plan(config, world_size=4, grad_accumulation=16):
-    experts = config["num_experts"]
-    top_k = config["num_experts_per_tok"]
-    expert_width = config["moe_intermediate_size"]
-    tied_vocab = config["tie_word_embeddings"]
-    hidden = config["hidden_size"]
-    layers = config["num_hidden_layers"]
+def make_plan(config, world_size=4, grad_accumulation=16, target_flops=TARGET_FLOPS, *, flops_protocol=None):
+    for value in (world_size, grad_accumulation, target_flops):
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ValueError("World size, accumulation and target FLOPs must be positive integers")
     sequence = config["max_position_embeddings"]
-    ledger_shape = {
-        "num_layers": layers,
-        "hidden_size": hidden,
-        "num_attention_heads": config["num_attention_heads"],
-        "num_key_value_heads": config["num_key_value_heads"],
-        "attention_head_dim": config["head_dim"],
-        "context_length": sequence,
-        "vocab_size": config["vocab_size"],
-        "intermediate_size": top_k * expert_width,
-    }
-    # The selected experts contribute the same projection FLOPs as one
-    # SwiGLU with their combined width. Router work is accounted separately.
-    active_breakdown = parameters(ledger_shape)
-    embedding_parameters = active_breakdown["embedding_and_tied_lm_head"]
-    if not tied_vocab:
-        del active_breakdown["embedding_and_tied_lm_head"]
-        active_breakdown["token_embedding"] = embedding_parameters
-        active_breakdown["lm_head"] = embedding_parameters
-    router_parameters = layers * hidden * experts
-    active_breakdown["router"] = router_parameters
-    total_breakdown = dict(active_breakdown)
-    total_breakdown["swiglu_projections"] = layers * experts * 3 * hidden * expert_width
-
-    flops_per_microbatch, attention_cost = qwen3_moe_cost(config, sequence)
+    parameter_report = qwen3_moe_parameters(config)
+    flops_per_microbatch, attention_cost = qwen3_moe_cost(config, sequence, protocol=flops_protocol)
     replicas_per_update = world_size * grad_accumulation
     flops_per_update = flops_per_microbatch * replicas_per_update
     tokens_per_update = sequence * replicas_per_update
-    steps = TARGET_FLOPS // flops_per_update
-    active = sum(active_breakdown.values())
-    vocab_parameters = embedding_parameters * (1 if tied_vocab else 2)
-    including_vocab = "including_tied_vocab" if tied_vocab else "including_input_and_output_vocab"
-    excluding_vocab = "excluding_tied_vocab" if tied_vocab else "excluding_input_and_output_vocab"
+    steps = target_flops // flops_per_update
     return {
-        "total_parameters": sum(total_breakdown.values()),
-        "parameters_by_component": total_breakdown,
-        f"active_parameters_{including_vocab}": active,
-        f"active_parameters_{excluding_vocab}": active - vocab_parameters,
+        **parameter_report,
+        **({"flops_protocol": flops_protocol} if flops_protocol is not None else {}),
         "world_size": world_size,
         "micro_batch_size": 1,
         "grad_accumulation_steps": grad_accumulation,
@@ -66,28 +35,34 @@ def make_plan(config, world_size=4, grad_accumulation=16):
         "flops_per_microbatch": flops_per_microbatch,
         "flops_per_token": flops_per_microbatch / sequence,
         "flops_per_update": flops_per_update,
-        "target_flops": TARGET_FLOPS,
+        "target_flops": target_flops,
         "optimizer_updates": steps,
         "planned_training_tokens": steps * tokens_per_update,
         "estimated_training_flops": steps * flops_per_update,
         "attention_core_and_elementwise_flops_per_microbatch": attention_cost,
-        "accounting": "Logical prediction graph with the existing causal S^2/2 convention",
-        "excluded": [
+        "accounting": flops_protocol or "Logical prediction graph with the existing causal S^2/2 convention",
+        "excluded": ([
+            "ordinary Transformer elementwise terms, following the Megatron reference",
+            "top-k comparisons, integer routing counts, indexing, copies and casts are not FLOPs",
+            "optimizer, communication and activation recomputation",
+        ] if flops_protocol is not None else [
             "expert dispatch and top-k selection",
             "language-model and router auxiliary losses",
             "optimizer, DDP communication and activation recomputation",
-        ],
+        ]),
     }
 
 
-def make_training_settings(config, baseline, target_tokens=None):
+def make_training_settings(config, baseline, target_tokens=None, *, budget_tier="3e17",
+                           run_name=None, learning_rate=0.003, warmup_fraction=None,
+                           cooldown_fraction=None, enforce_legacy_limits=True):
     from context_curriculum import apply_length_curriculum
 
     seq = config["max_position_embeddings"]
     per_token = Fraction(baseline["flops_per_microbatch"], seq)
     full_steps = baseline["optimizer_updates"]
     settings = {
-        "run": {"name": "qwen3_moe_a30m_3e17_soap", "seed": 42},
+        "run": {"name": run_name or "qwen3_moe_a30m_3e17_soap", "seed": 42},
         "model": {"type": "qwen3_moe", "context_length": seq, "hf_config": config},
         "training": {
             "dtype": "bfloat16", "max_steps": full_steps,
@@ -96,7 +71,7 @@ def make_training_settings(config, baseline, target_tokens=None):
             "gradient_checkpointing": False,
         },
         "optimizer": {
-            "name": "soap", "learning_rate": 0.003, "betas": [0.95, 0.95],
+            "name": "soap", "learning_rate": learning_rate, "betas": [0.95, 0.95],
             "eps": 1e-8, "weight_decay": 0.1,
             "precondition_frequency": 10, "max_precond_dim": 1024,
         },
@@ -113,31 +88,38 @@ def make_training_settings(config, baseline, target_tokens=None):
             "tokens_per_update": baseline["tokens_per_update"],
         },
         "budget": {
-            "total_training_flops": TARGET_FLOPS,
+            "total_training_flops": baseline["target_flops"],
             "planned_training_flops": baseline["estimated_training_flops"],
             "planned_training_tokens": baseline["planned_training_tokens"],
             "flops_per_token_numerator": per_token.numerator,
             "flops_per_token_denominator": per_token.denominator,
             "flops_per_update": baseline["flops_per_update"],
         },
-        "submission": {"budget_tier": "3e17", "data_parallel_size": baseline["world_size"]},
+        "submission": {"budget_tier": budget_tier, "data_parallel_size": baseline["world_size"]},
         "logging": {"eval_batches": 8, "final_eval_batches": 64, "checkpoint_keep_last": 2},
     }
+    if "flops_protocol" in baseline:
+        settings["budget"]["flops_protocol"] = baseline["flops_protocol"]
+    for name, fraction in (("warmup", warmup_fraction), ("cooldown", cooldown_fraction)):
+        if fraction is not None:
+            if not 0 < fraction < 1:
+                raise ValueError(f"{name} fraction must be between zero and one")
+            settings["scheduler"][f"{name}_steps"] = max(1, round(full_steps * fraction))
     if target_tokens is not None:
         active_key = (
             "active_parameters_including_tied_vocab" if config["tie_word_embeddings"]
             else "active_parameters_including_input_and_output_vocab"
         )
         active_millions = round(baseline[active_key] / 1_000_000)
-        settings["run"]["name"] = f"qwen3_moe_a{active_millions}m_3e17_soap"
+        settings["run"]["name"] = run_name or f"qwen3_moe_a{active_millions}m_{budget_tier}_soap"
         settings["budget"]["target_training_tokens"] = target_tokens
     apply_length_curriculum(settings)
     steps = settings["training"]["max_steps"]
     tokens = settings["budget"]["planned_training_tokens"]
-    if target_tokens is None:
+    if target_tokens is None and enforce_legacy_limits:
         if steps <= 1500 or not 800_000_000 <= tokens <= 1_000_000_000:
             raise ValueError("Qwen3 MoE plan must exceed 1500 steps and process 0.8–1B tokens")
-    elif not target_tokens <= tokens < target_tokens + baseline["tokens_per_update"]:
+    elif target_tokens is not None and not target_tokens <= tokens < target_tokens + baseline["tokens_per_update"]:
         raise ValueError("Qwen3 MoE token budget differs from the requested whole-update target")
     milestones = list(range(800, steps, 800))
     settings["logging"].update(checkpoint_steps=milestones, eval_steps=milestones)

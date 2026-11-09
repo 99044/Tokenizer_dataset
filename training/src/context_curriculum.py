@@ -40,6 +40,7 @@ def _build_qwen3_moe_curriculum(settings, reference):
     from qwen3_flops import qwen3_moe_cost
 
     hf = settings["model"]["hf_config"]
+    protocol = settings["budget"].get("flops_protocol")
     world = _integer(settings["submission"]["data_parallel_size"], "data_parallel_size")
     tokens = _integer(settings["scaling"]["tokens_per_update"], "tokens_per_update")
     budget = _integer(settings["budget"]["total_training_flops"], "total_training_flops")
@@ -47,7 +48,7 @@ def _build_qwen3_moe_curriculum(settings, reference):
     if context != 8192 or hf["max_position_embeddings"] != context or tokens % (world * context):
         raise ValueError("Qwen3 MoE curriculum requires an 8192 context and whole batches")
     accumulation = tokens // (world * context)
-    full_cost, _ = qwen3_moe_cost(hf, context)
+    full_cost, _ = qwen3_moe_cost(hf, context, protocol=protocol)
     full_update = full_cost * world * accumulation
     full_steps = budget // full_update
     if (
@@ -66,7 +67,7 @@ def _build_qwen3_moe_curriculum(settings, reference):
         raise ValueError("Invalid Qwen3 MoE final LR ratio")
 
     update_costs = [
-        qwen3_moe_cost(hf, length)[0] * (context // length) * world * accumulation
+        qwen3_moe_cost(hf, length, protocol=protocol, micro_batch_size=context // length)[0] * world * accumulation
         for _, length, _ in STAGES
     ]
     target_tokens = settings["budget"].get("target_training_tokens")
@@ -114,13 +115,19 @@ def _build_qwen3_moe_curriculum(settings, reference):
         planned_training_flops=completed, planned_training_tokens=steps * tokens,
         unused_reference_flops=budget - completed,
         accounting=dict(
-            kind="qwen3_moe_prediction_graph",
+            kind=protocol or "qwen3_moe_prediction_graph",
             official_ledger=False,
+            **({"reference_matched": True, "router_graph_audited": True,
+                "scalar_costs": {"exp": 1, "divide": 1}} if protocol else {}),
             **({} if target_tokens is None else {
                 "target_training_tokens": target_tokens,
                 "allocation": "whole-update token target; reserve 20% of updates for 4K and maximize 8K within the FLOPs cap",
             }),
-            limitations="Excludes expert dispatch, top-k selection, language-model and router auxiliary losses, optimizer, communication and activation recomputation.",
+            limitations=("Megatron reference plus source-derived routing/auxiliary-loss arithmetic. "
+                         "Exp/divide cost 1 is an explicit convention, not specified by the supplied rule. "
+                         "Ordinary Transformer elementwise/LM-loss terms follow reference exclusions; "
+                         "optimizer, recomputation and communication are excluded. Not organizer certification."
+                         if protocol else "Excludes expert dispatch, top-k selection, language-model and router auxiliary losses, optimizer, communication and activation recomputation."),
         ),
     )
 

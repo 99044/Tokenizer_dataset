@@ -1,6 +1,16 @@
 # Training, export, and evaluation
 
-This branch contains one configuration for each of the four FLOPs tiers.
+For the current **Qwen3 MoE experiments on 8 x H800**, use the four recipes in
+[`qwen3_moe/README.md`](qwen3_moe/README.md). Their configurations are under
+`qwen3_moe/configs/{3e17,1e18,3e18,1e19}/`. Run
+`bash qwen3_moe/run_all.sh TIER TRAIN_CACHE TOKENIZER_DIR EVAL_CACHE NEW_OUTPUT_DIR`.
+All four MoE tiers use the matching **24K** caches and tokenizer. These are
+paper-informed starting candidates; trained BPB has not yet been measured.
+
+## Previous hybrid submission recipes
+
+The original `run_submission_*.sh` entry points below retain the previous
+hybrid configurations. They do not launch the Qwen3 MoE experiments.
 
 | Tier | Source | Vocabulary | GPUs | Accumulation | Tokens/update | Steps | Optimizer |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |

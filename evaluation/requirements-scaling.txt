@@ -1,0 +1,2 @@
+# Optional CPU-only analysis; separate from the pinned training environment.
+scipy==1.15.3
