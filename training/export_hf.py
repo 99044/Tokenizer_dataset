@@ -156,6 +156,12 @@ def load_offline_model(output, trust_remote_code=False):
                           for name, value in loading.items()}
 
 
+def convert_qwen3_moe_state(_config, native_state):
+    if any(not name.startswith('lm.') for name in native_state):
+        raise ValueError('Qwen3 MoE checkpoint keys must belong to the native lm wrapper')
+    return {name.removeprefix('lm.'): tensor for name, tensor in native_state.items()}
+
+
 def export_checkpoint(args):
     import torch
     import yaml
@@ -170,18 +176,26 @@ def export_checkpoint(args):
     settings = plan['settings']
     model_type = settings['model']['type']
     hybrid = model_type in {'olmo_hybrid_scaling', 'olmo_hybrid_1b'}
+    qwen_moe = model_type == 'qwen3_moe'
     compressed = settings['model'].get('compressed_attention') is not None
-    if model_type != 'olmo3_1b' and not hybrid:
+    if model_type != 'olmo3_1b' and not hybrid and not qwen_moe:
         raise ValueError(f'unsupported native export architecture: {model_type}')
-    tokenizer, token_record = read_tokenizer(args.tokenizer_dir, plan['data'])
     training_length = settings['model']['context_length']
+    data = plan['data']
+    if qwen_moe:
+        from training_data import normalize_data_metadata
+
+        data = normalize_data_metadata(data, training_length)
+        if data['tokenizer_details']['tokenizer_json_sha256'] != settings['data']['tokenizer_json_sha256']:
+            raise ValueError('Qwen3 MoE checkpoint cache and model tokenizer identities differ')
+    tokenizer, token_record = read_tokenizer(args.tokenizer_dir, data)
     max_length = args.max_sequence_length or training_length
     native_state = checkpoint['model']
     ema_variant = getattr(args, 'ema', None)
     if ema_variant:
         from weight_ema import select_ema_weights
         native_state = select_ema_weights(checkpoint, ema_variant)
-    if settings['model']['tie_word_embeddings']:
+    if not qwen_moe and settings['model']['tie_word_embeddings']:
         embedding, projection = native_state['embeddings.weight'], native_state['lm_head.w_out.weight']
         if embedding.data_ptr() != projection.data_ptr() and not torch.equal(embedding, projection):
             raise ValueError('checkpoint declares tied embeddings but stores different weights')
@@ -203,7 +217,9 @@ def export_checkpoint(args):
             config_path = Path(temporary) / 'checkpoint.yaml'
             config_path.write_text(yaml.safe_dump(settings))
             core_config, _, _ = build_model_config(config_path, len(tokenizer))
-        core = core_config.build(init_device='meta')
+        # Qwen's rotary frequencies are nonpersistent buffers. Construct them
+        # on CPU so they remain available after assigning the saved weights.
+        core = core_config.build(init_device='cpu' if qwen_moe else 'meta')
         if compressed:
             from compressed_attention import attach_compressed_attention
             attach_compressed_attention(core, settings, torch.device('meta'))
@@ -214,8 +230,14 @@ def export_checkpoint(args):
             attach_dual_residual(core, settings)
             attach_value_residual(core, settings)
         core.load_state_dict(native_state, strict=True, assign=True)
-        tie_output_weights(core)
-    if not hybrid:
+        if not qwen_moe:
+            tie_output_weights(core)
+    if qwen_moe:
+        from copy import deepcopy
+
+        hf_config = deepcopy(core.lm.config)
+        convert_state_to_hf = convert_qwen3_moe_state
+    elif not hybrid:
         from olmo_core.nn.hf import convert_state_to_hf, get_hf_config
 
         hf_config = get_hf_config(core)
@@ -254,7 +276,10 @@ def export_checkpoint(args):
                   if hybrid and getattr(hf_config, 'dual_residual', None)
                   else 'bfloat16_with_fp32_gdn_norms' if hybrid else 'bfloat16'),
         'trust_remote_code_required': hybrid,
-        'validation_reference': 'unfused_native_cpu_recurrence' if cpu_reference else 'native_olmo_core',
+        'validation_reference': (
+            'native_qwen3_moe' if qwen_moe else
+            'unfused_native_cpu_recurrence' if cpu_reference else 'native_olmo_core'
+        ),
         'tokenizer': token_record, 'logits_validation': [],
         'validation_policy': 'Exact weights and original dtypes, plus strict FP32 logits required; '
                              'BF16 logits differences are recorded separately.',
@@ -284,7 +309,8 @@ def export_checkpoint(args):
         device = torch.device(args.validation_device)
         core = core.to(device).eval()
         hf = hf.to(device).eval()
-        lengths = args.validation_lengths or [min(32, max_length), min(1024, max_length), max_length]
+        default_lengths = (16, 64) if qwen_moe else (32, 1024, max_length)
+        lengths = args.validation_lengths or [min(length, max_length) for length in default_lengths]
         if hybrid and not args.validation_lengths:
             lengths.extend(length for length in (63, 64, 65, 129) if length <= max_length)
         window = getattr(hf_config, 'sliding_window', None)
@@ -303,7 +329,7 @@ def export_checkpoint(args):
             if dtype == torch.float32:
                 core.float()
                 hf.float()
-                if not cpu_reference:
+                if not cpu_reference and not qwen_moe:
                     # FlashAttention 2 does not accept FP32. Keep the native
                     # modules and RoPE, but use OLMo's SDPA backend for this
                     # high-precision comparison only.
@@ -326,7 +352,10 @@ def export_checkpoint(args):
             for length in sorted(set(lengths)):
                 inputs = torch.randint(len(tokenizer), (1, length), generator=generator).to(device)
                 with torch.inference_mode():
-                    native_logits = core(inputs)
+                    if qwen_moe:
+                        native_logits = core.lm(input_ids=inputs, use_cache=False).logits
+                    else:
+                        native_logits = core(inputs)
                     hf_logits = hf(inputs, use_cache=False, return_dict=True).logits
                     if tuple(hf_logits.shape) != (1, length, len(tokenizer)):
                         raise ValueError('HF model did not return full causal LM logits')

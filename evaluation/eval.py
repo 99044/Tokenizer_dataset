@@ -85,13 +85,9 @@ def load_evaluation_cache(directory, model_path, config):
 
 
 def active_parameter_count(model):
-    """Count dense N_a, excluding input/output vocabulary parameters.
-
-    For MoE or dynamic depth, adapt the evaluator to collect actual routing
-    statistics outside timed forward calls. Average over scored evaluation tokens,
-    counting each active non-vocabulary parameter at most once per token.
-    """
-    if any(getattr(model.config, key, 0) > 1 for key in (
+    """Count active non-vocabulary parameters for dense or fixed-top-k Qwen3 MoE."""
+    qwen_moe = model.config.model_type == "qwen3_moe"
+    if not qwen_moe and any(getattr(model.config, key, 0) > 1 for key in (
         "num_experts", "num_local_experts", "n_routed_experts"
     ) if getattr(model.config, key, None) is not None):
         raise NotImplementedError("Implement active-parameter counting for this model's routing")
@@ -99,7 +95,21 @@ def active_parameter_count(model):
     for module in (model.get_input_embeddings(), model.get_output_embeddings()):
         if module is not None:
             excluded.update(id(p) for p in module.parameters())
-    return sum(p.numel() for p in model.parameters() if id(p) not in excluded)
+    active = sum(p.numel() for p in model.parameters() if id(p) not in excluded)
+    if qwen_moe:
+        num_experts = model.config.num_experts
+        top_k = model.config.num_experts_per_tok
+        if not 1 <= top_k <= num_experts:
+            raise ValueError("Invalid Qwen3 MoE fixed top-k routing")
+        for layer in model.model.layers:
+            experts = getattr(layer.mlp, "experts", None)
+            if experts is not None:
+                count = sum(p.numel() for p in experts.parameters())
+                per_expert, remainder = divmod(count, num_experts)
+                if remainder:
+                    raise ValueError("Qwen3 MoE expert weights are not evenly sized")
+                active -= per_expert * (num_experts - top_k)
+    return active
 
 
 def parse_args(argv=None):
@@ -182,6 +192,8 @@ def main():
     if loading_info.get("missing_keys") or loading_info.get("mismatched_keys"):
         raise RuntimeError(f"Checkpoint did not fully initialize the language model: {loading_info}")
     model.to(device).eval()
+    if config.model_type == "qwen3_moe" and args.fusion != "none":
+        raise ValueError("Qwen3 MoE evaluation requires --fusion none")
     from fusion import install_operator_fusion
     fusion_info = install_operator_fusion(model, mode=args.fusion)
     if rank == 0:
