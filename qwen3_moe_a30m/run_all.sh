@@ -10,6 +10,7 @@ tokenizer=$2
 eval_cache=$3
 output=$4
 python_bin=${PYTHON:-python}
+export TRAIN_CONFIG=${TRAIN_CONFIG:-"$root/qwen3_moe_a30m/training.yaml"}
 visible=${CUDA_VISIBLE_DEVICES:-0,1,2,3}
 eval_gpu=${EVAL_GPU:-${visible%%,*}}
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
@@ -20,7 +21,7 @@ if [[ -e "$output" ]]; then
 fi
 
 plan=$(PYTHONPATH="$root/training/src:$root/evaluation${PYTHONPATH:+:$PYTHONPATH}" \
-    "$python_bin" - "$root/qwen3_moe_a30m/training.yaml" "$train_cache" "$tokenizer" "$eval_cache" <<'PY'
+    "$python_bin" - "$TRAIN_CONFIG" "$train_cache" "$tokenizer" "$eval_cache" <<'PY'
 import hashlib
 import json
 from pathlib import Path

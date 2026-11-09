@@ -80,7 +80,7 @@ def make_plan(config, world_size=4, grad_accumulation=16):
     }
 
 
-def make_training_settings(config, baseline):
+def make_training_settings(config, baseline, target_tokens=None):
     from context_curriculum import apply_length_curriculum
 
     seq = config["max_position_embeddings"]
@@ -123,11 +123,22 @@ def make_training_settings(config, baseline):
         "submission": {"budget_tier": "3e17", "data_parallel_size": baseline["world_size"]},
         "logging": {"eval_batches": 8, "final_eval_batches": 64, "checkpoint_keep_last": 2},
     }
+    if target_tokens is not None:
+        active_key = (
+            "active_parameters_including_tied_vocab" if config["tie_word_embeddings"]
+            else "active_parameters_including_input_and_output_vocab"
+        )
+        active_millions = round(baseline[active_key] / 1_000_000)
+        settings["run"]["name"] = f"qwen3_moe_a{active_millions}m_3e17_soap"
+        settings["budget"]["target_training_tokens"] = target_tokens
     apply_length_curriculum(settings)
     steps = settings["training"]["max_steps"]
     tokens = settings["budget"]["planned_training_tokens"]
-    if steps <= 1500 or not 800_000_000 <= tokens <= 1_000_000_000:
-        raise ValueError("Qwen3 MoE plan must exceed 1500 steps and process 0.8–1B tokens")
+    if target_tokens is None:
+        if steps <= 1500 or not 800_000_000 <= tokens <= 1_000_000_000:
+            raise ValueError("Qwen3 MoE plan must exceed 1500 steps and process 0.8–1B tokens")
+    elif not target_tokens <= tokens < target_tokens + baseline["tokens_per_update"]:
+        raise ValueError("Qwen3 MoE token budget differs from the requested whole-update target")
     milestones = list(range(800, steps, 800))
     settings["logging"].update(checkpoint_steps=milestones, eval_steps=milestones)
     return settings
@@ -139,15 +150,18 @@ if __name__ == "__main__":
     parser.add_argument("--world-size", type=int, default=4)
     parser.add_argument("--grad-accumulation", type=int, default=16)
     parser.add_argument("--write-training-config", type=Path)
+    parser.add_argument("--target-tokens", type=int)
     args = parser.parse_args()
     if min(args.world_size, args.grad_accumulation) < 1:
         parser.error("world size and gradient accumulation must be positive")
+    if args.target_tokens is not None and (args.target_tokens < 1 or not args.write_training_config):
+        parser.error("--target-tokens requires a positive value and --write-training-config")
     config = json.loads(args.config.read_text(encoding="utf-8"))
     baseline = make_plan(config, args.world_size, args.grad_accumulation)
     if args.write_training_config:
         import yaml
 
-        settings = make_training_settings(config, baseline)
+        settings = make_training_settings(config, baseline, args.target_tokens)
         args.write_training_config.write_text(yaml.safe_dump(settings, sort_keys=False), encoding="utf-8")
         print(json.dumps(settings["training"]["length_curriculum"], indent=2))
     else:

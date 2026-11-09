@@ -65,21 +65,44 @@ def _build_qwen3_moe_curriculum(settings, reference):
     if not 0 <= reference["final_lr_ratio"] <= 1:
         raise ValueError("Invalid Qwen3 MoE final LR ratio")
 
+    update_costs = [
+        qwen3_moe_cost(hf, length)[0] * (context // length) * world * accumulation
+        for _, length, _ in STAGES
+    ]
+    target_tokens = settings["budget"].get("target_training_tokens")
+    stage_counts = None
+    if target_tokens is not None:
+        target_tokens = _integer(target_tokens, "target_training_tokens")
+        total = (target_tokens + tokens - 1) // tokens
+        medium = round(total * STAGES[1][2])
+        short_update, medium_update, long_update = update_costs
+        # Reserve roughly one fifth of the updates for 4K. Start with the
+        # remaining updates at 2K, then move as many as possible to 8K.
+        base = (total - medium) * short_update + medium * medium_update
+        full = min(total - medium - 1, (budget - base) // (long_update - short_update))
+        stage_counts = [total - medium - full, medium, full]
+        if min(stage_counts) < 1:
+            raise ValueError("The target tokens and all three lengths do not fit the FLOPs budget")
+
     stages = []
     steps = completed = 0
     for index, (name, length, fraction) in enumerate(STAGES):
         micro_batch_size = context // length
-        micro_cost, _ = qwen3_moe_cost(hf, length)
-        update_cost = micro_cost * micro_batch_size * world * accumulation
-        allocation = budget * fraction if index < len(STAGES) - 1 else budget - completed
-        count = int(allocation // update_cost)
+        update_cost = update_costs[index]
+        if stage_counts is None:
+            allocation = budget * fraction if index < len(STAGES) - 1 else budget - completed
+            count = int(allocation // update_cost)
+        else:
+            count = stage_counts[index]
         if count < 1:
             raise ValueError("Every Qwen3 MoE curriculum stage needs a complete update")
         flops = count * update_cost
         stages.append(dict(
             stage=name, stage_index=index, length=length, micro_batch_size=micro_batch_size,
             grad_accum_steps=accumulation, tokens_per_update=tokens,
-            requested_flops_fraction=float(fraction), first_step=steps + 1,
+            **({"requested_flops_fraction": float(fraction)} if stage_counts is None
+               else {"planned_flops_fraction": flops / budget}),
+            first_step=steps + 1,
             last_step=steps + count, steps=count, flops_per_update=update_cost,
             flops=flops, cumulative_flops=completed + flops,
         ))
@@ -93,6 +116,10 @@ def _build_qwen3_moe_curriculum(settings, reference):
         accounting=dict(
             kind="qwen3_moe_prediction_graph",
             official_ledger=False,
+            **({} if target_tokens is None else {
+                "target_training_tokens": target_tokens,
+                "allocation": "whole-update token target; reserve 20% of updates for 4K and maximize 8K within the FLOPs cap",
+            }),
             limitations="Excludes expert dispatch, top-k selection, language-model and router auxiliary losses, optimizer, communication and activation recomputation.",
         ),
     )
