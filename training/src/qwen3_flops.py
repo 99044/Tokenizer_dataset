@@ -16,7 +16,7 @@ def parameters(model):
     }
 
 
-def qwen3_ledger(model, micro_batch_size):
+def qwen3_ledger(model, micro_batch_size, *, attention_window=None):
     d, f, h = (model[k] for k in ("hidden_size", "intermediate_size", "attention_head_dim"))
     q_heads, kv_heads = (model[k] for k in ("num_attention_heads", "num_key_value_heads"))
     vocab, seq = model["vocab_size"], model["context_length"]
@@ -35,10 +35,21 @@ def qwen3_ledger(model, micro_batch_size):
     projections("layer.swiglu.projections", [(d, f), (d, f), (f, d)])
     projections("output.lm_head", [(d, vocab)])
 
+    # Global layers keep the historical S²/2 convention. A window includes
+    # the query token and has a shorter prefix before the band is filled.
+    pairs = micro_batch_size * q_heads * seq * seq // 2
+    if attention_window is not None:
+        window = min(attention_window, seq)
+        pairs_per_head = seq * window - window * (window - 1) // 2
+        pairs = micro_batch_size * q_heads * pairs_per_head
     attention = Operations(1)
     for phase, calls in (("forward", 2), ("backward", 4)):
-        attention.mm("causal_qk_av", seq, h, seq, phase,
-                     calls=calls * micro_batch_size * q_heads, causal_reference_half=True)
+        if attention_window is None:
+            attention.mm("causal_qk_av", seq, h, seq, phase,
+                         calls=calls * micro_batch_size * q_heads, causal_reference_half=True)
+        else:
+            attention.mm("windowed_qk_av", pairs_per_head, h, 1, phase,
+                         calls=calls * micro_batch_size * q_heads)
     components["layer.attention.core"] = attention.items
 
     elem = Operations(1)
@@ -49,7 +60,6 @@ def qwen3_ledger(model, micro_batch_size):
         elem.op("rope.add", "add", width, phase)
         elem.op("rope.negate", "multiply", width // 2, phase)
     rows = tokens * q_heads
-    pairs = micro_batch_size * q_heads * seq * seq // 2
     elem.op("attention.scale", "multiply", pairs)
     elem.op("softmax.subtract_max", "subtract", pairs)
     elem.scalar("softmax.exp", pairs)
@@ -93,6 +103,23 @@ def qwen3_ledger(model, micro_batch_size):
     return result
 
 
+def qwen3_moe_windows(config):
+    """Return the local width and the zero-based global layer indices."""
+    window = config.get("local_attention_window")
+    global_layers = config.get("global_attention_layers")
+    if window is None and global_layers is None:
+        return None, ()
+    layers = config["num_hidden_layers"]
+    if (
+        type(window) is not int or window < 1 or config.get("use_sliding_window", False)
+        or not isinstance(global_layers, (list, tuple)) or not 0 < len(global_layers) < layers
+        or any(type(index) is not int or not 0 <= index < layers for index in global_layers)
+        or len(set(global_layers)) != len(global_layers)
+    ):
+        raise ValueError("Expected a positive local window and unique in-range global MoE layers")
+    return window, tuple(global_layers)
+
+
 def qwen3_moe_cost(config, sequence):
     """Prediction-graph microbatch FLOPs for one sequence of a routed Qwen3."""
     layers = config["num_hidden_layers"]
@@ -115,4 +142,17 @@ def qwen3_moe_cost(config, sequence):
         ledger[name]["forward"] + ledger[name]["backward"]
         for name in ("layer.attention.core", "layer.attention.elementwise")
     )
+    window, global_layers = qwen3_moe_windows(config)
+    if window is not None:
+        local_layers = layers - len(global_layers)
+        local_ledger = qwen3_ledger(
+            {**shape, "num_layers": local_layers}, micro_batch_size=1, attention_window=window,
+        )
+        local_attention = sum(
+            local_ledger[name]["forward"] + local_ledger[name]["backward"]
+            for name in ("layer.attention.core", "layer.attention.elementwise")
+        )
+        delta = local_attention - attention * local_layers // layers
+        dense += delta
+        attention += delta
     return dense + router_projection + router_combine, attention

@@ -185,8 +185,10 @@ def main():
     global_batch_size = args.batch_size * dist.get_world_size()
     num_steps = math.ceil(num_sequences / global_batch_size)
 
+    windowed_moe = config.model_type == "qwen3_moe" and getattr(config, "local_attention_window", None)
     model, loading_info = AutoModelForCausalLM.from_pretrained(
-        args.model_path, config=config, dtype=torch.bfloat16, attn_implementation="sdpa",
+        args.model_path, config=config, dtype=torch.bfloat16,
+        attn_implementation="flash_attention_2" if windowed_moe else "sdpa",
         local_files_only=True, trust_remote_code=True, output_loading_info=True,
     )
     if loading_info.get("missing_keys") or loading_info.get("mismatched_keys"):

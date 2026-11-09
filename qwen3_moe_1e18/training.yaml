@@ -1,0 +1,181 @@
+run:
+  name: qwen3_moe_a27m_1e18_soap
+  seed: 42
+model:
+  type: qwen3_moe
+  context_length: 8192
+  hf_config:
+    architectures:
+    - Qwen3MoeForCausalLM
+    model_type: qwen3_moe
+    vocab_size: 24576
+    hidden_size: 256
+    num_hidden_layers: 12
+    num_attention_heads: 16
+    num_key_value_heads: 4
+    head_dim: 8
+    max_position_embeddings: 8192
+    rope_theta: 1000000.0
+    rms_norm_eps: 1.0e-06
+    initializer_range: 0.02
+    hidden_act: silu
+    attention_bias: false
+    attention_dropout: 0.0
+    use_sliding_window: false
+    intermediate_size: 768
+    decoder_sparse_step: 1
+    mlp_only_layers: []
+    num_experts: 128
+    num_experts_per_tok: 12
+    moe_intermediate_size: 120
+    norm_topk_prob: true
+    output_router_logits: false
+    router_aux_loss_coef: 0.001
+    tie_word_embeddings: false
+    use_cache: true
+    bos_token_id: 1
+    eos_token_id: 2
+    pad_token_id: 3
+    local_attention_window: 1024
+    global_attention_layers:
+    - 3
+    - 7
+    - 11
+training:
+  dtype: bfloat16
+  max_steps: 16955
+  micro_batch_size: 1
+  gradient_accumulation_steps: 6
+  gradient_checkpointing: false
+  length_curriculum:
+    kind: qwen3_moe_length_fp32
+    version: 1
+    world_size: 8
+    tokens_per_update: 393216
+    reference:
+      context_length: 8192
+      max_steps: 15720
+      planned_training_flops: 999945075981496320
+      planned_training_tokens: 6181355520
+      flops_per_token_numerator: 41412589621
+      flops_per_token_denominator: 256
+      warmup_steps: 20
+      cooldown_steps: 2642
+      final_lr_ratio: 0.0
+    stages:
+    - stage: short
+      stage_index: 0
+      length: 2048
+      micro_batch_size: 4
+      grad_accum_steps: 6
+      tokens_per_update: 393216
+      planned_flops_fraction: 0.48856612640108543
+      first_step: 1
+      last_step: 8676
+      steps: 8676
+      flops_per_update: 56312370493440
+      flops: 488566126401085440
+      cumulative_flops: 488566126401085440
+    - stage: medium
+      stage_index: 1
+      length: 4096
+      micro_batch_size: 2
+      grad_accum_steps: 6
+      tokens_per_update: 393216
+      planned_flops_fraction: 0.20050502338022708
+      first_step: 8677
+      last_step: 12067
+      steps: 3391
+      flops_per_update: 59128582536192
+      flops: 200505023380227072
+      cumulative_flops: 689071149781312512
+    - stage: full
+      stage_index: 2
+      length: 8192
+      micro_batch_size: 1
+      grad_accum_steps: 6
+      tokens_per_update: 393216
+      planned_flops_fraction: 0.31092439767160013
+      first_step: 12068
+      last_step: 16955
+      steps: 4888
+      flops_per_update: 63609737657856
+      flops: 310924397671600128
+      cumulative_flops: 999995547452912640
+    max_steps: 16955
+    planned_training_flops: 999995547452912640
+    planned_training_tokens: 6666977280
+    unused_reference_flops: 4452547087360
+    accounting:
+      kind: qwen3_moe_prediction_graph
+      official_ledger: false
+      target_training_tokens: 6666666667
+      allocation: whole-update token target; reserve 20% of updates for 4K and maximize
+        8K within the FLOPs cap
+      limitations: Excludes expert dispatch, top-k selection, language-model and router
+        auxiliary losses, optimizer, communication and activation recomputation.
+  fp32_master_weights: true
+optimizer:
+  name: soap
+  learning_rate: 0.003
+  betas:
+  - 0.95
+  - 0.95
+  eps: 1.0e-08
+  weight_decay: 0.1
+  precondition_frequency: 10
+  max_precond_dim: 1024
+scheduler:
+  name: linear_cooldown
+  warmup_steps: 23
+  cooldown_steps: 2643
+  final_lr_ratio: 0.0
+  warmup_fraction: 0.001272264631043257
+  cooldown_fraction: 0.16806615776081424
+data:
+  format: npy_packed_tokens
+  tokenizer_json_sha256: 6f1812b3fbf8758220be646974072ef08c66df2d2d5ef9d398f0e158b9ee947c
+scaling:
+  expected_total_parameters: 155523520
+  tokens_per_update: 393216
+  flops_accounting: qwen3_moe_prediction_graph
+budget:
+  total_training_flops: 1000000000000000000
+  planned_training_flops: 999995547452912640
+  planned_training_tokens: 6666977280
+  flops_per_token_numerator: 41412589621
+  flops_per_token_denominator: 256
+  target_training_tokens: 6666666667
+  flops_per_token_basis: 8192-token reference; use curriculum stage costs at runtime
+submission:
+  budget_tier: 1e18
+  data_parallel_size: 8
+logging:
+  eval_batches: 8
+  final_eval_batches: 64
+  checkpoint_keep_last: 2
+  eval_every_steps: 16955
+  checkpoint_every_steps: 16955
+  checkpoint_steps: &id001
+  - 800
+  - 1600
+  - 2400
+  - 3200
+  - 4000
+  - 4800
+  - 5600
+  - 6400
+  - 7200
+  - 8000
+  - 8800
+  - 9600
+  - 10400
+  - 11200
+  - 12000
+  - 12800
+  - 13600
+  - 14400
+  - 15200
+  - 16000
+  - 16800
+  eval_steps: *id001

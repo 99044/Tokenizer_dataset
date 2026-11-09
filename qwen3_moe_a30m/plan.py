@@ -1,4 +1,4 @@
-"""Estimate the 3e17 plan with the existing Qwen3 Dense FLOPs ledger."""
+"""Build a Qwen3 MoE plan using the prediction-graph FLOPs ledger."""
 
 import argparse
 from fractions import Fraction
@@ -10,10 +10,11 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT.parent / "training" / "src"))
 from qwen3_flops import parameters, qwen3_moe_cost
 
-TARGET_FLOPS = 3 * 10**17
+TIER_FLOPS = {"3e17": 3 * 10**17, "1e18": 10**18}
 
 
-def make_plan(config, world_size=4, grad_accumulation=16):
+def make_plan(config, world_size=4, grad_accumulation=16, tier="3e17"):
+    target_flops = TIER_FLOPS[tier]
     experts = config["num_experts"]
     top_k = config["num_experts_per_tok"]
     expert_width = config["moe_intermediate_size"]
@@ -48,7 +49,7 @@ def make_plan(config, world_size=4, grad_accumulation=16):
     replicas_per_update = world_size * grad_accumulation
     flops_per_update = flops_per_microbatch * replicas_per_update
     tokens_per_update = sequence * replicas_per_update
-    steps = TARGET_FLOPS // flops_per_update
+    steps = target_flops // flops_per_update
     active = sum(active_breakdown.values())
     vocab_parameters = embedding_parameters * (1 if tied_vocab else 2)
     including_vocab = "including_tied_vocab" if tied_vocab else "including_input_and_output_vocab"
@@ -66,7 +67,7 @@ def make_plan(config, world_size=4, grad_accumulation=16):
         "flops_per_microbatch": flops_per_microbatch,
         "flops_per_token": flops_per_microbatch / sequence,
         "flops_per_update": flops_per_update,
-        "target_flops": TARGET_FLOPS,
+        "target_flops": target_flops,
         "optimizer_updates": steps,
         "planned_training_tokens": steps * tokens_per_update,
         "estimated_training_flops": steps * flops_per_update,
@@ -86,8 +87,9 @@ def make_training_settings(config, baseline, target_tokens=None):
     seq = config["max_position_embeddings"]
     per_token = Fraction(baseline["flops_per_microbatch"], seq)
     full_steps = baseline["optimizer_updates"]
+    tier = next(tier for tier, flops in TIER_FLOPS.items() if flops == baseline["target_flops"])
     settings = {
-        "run": {"name": "qwen3_moe_a30m_3e17_soap", "seed": 42},
+        "run": {"name": f"qwen3_moe_a30m_{tier}_soap", "seed": 42},
         "model": {"type": "qwen3_moe", "context_length": seq, "hf_config": config},
         "training": {
             "dtype": "bfloat16", "max_steps": full_steps,
@@ -113,14 +115,14 @@ def make_training_settings(config, baseline, target_tokens=None):
             "tokens_per_update": baseline["tokens_per_update"],
         },
         "budget": {
-            "total_training_flops": TARGET_FLOPS,
+            "total_training_flops": baseline["target_flops"],
             "planned_training_flops": baseline["estimated_training_flops"],
             "planned_training_tokens": baseline["planned_training_tokens"],
             "flops_per_token_numerator": per_token.numerator,
             "flops_per_token_denominator": per_token.denominator,
             "flops_per_update": baseline["flops_per_update"],
         },
-        "submission": {"budget_tier": "3e17", "data_parallel_size": baseline["world_size"]},
+        "submission": {"budget_tier": tier, "data_parallel_size": baseline["world_size"]},
         "logging": {"eval_batches": 8, "final_eval_batches": 64, "checkpoint_keep_last": 2},
     }
     if target_tokens is not None:
@@ -129,13 +131,13 @@ def make_training_settings(config, baseline, target_tokens=None):
             else "active_parameters_including_input_and_output_vocab"
         )
         active_millions = round(baseline[active_key] / 1_000_000)
-        settings["run"]["name"] = f"qwen3_moe_a{active_millions}m_3e17_soap"
+        settings["run"]["name"] = f"qwen3_moe_a{active_millions}m_{tier}_soap"
         settings["budget"]["target_training_tokens"] = target_tokens
     apply_length_curriculum(settings)
     steps = settings["training"]["max_steps"]
     tokens = settings["budget"]["planned_training_tokens"]
     if target_tokens is None:
-        if steps <= 1500 or not 800_000_000 <= tokens <= 1_000_000_000:
+        if tier == "3e17" and (steps <= 1500 or not 800_000_000 <= tokens <= 1_000_000_000):
             raise ValueError("Qwen3 MoE plan must exceed 1500 steps and process 0.8–1B tokens")
     elif not target_tokens <= tokens < target_tokens + baseline["tokens_per_update"]:
         raise ValueError("Qwen3 MoE token budget differs from the requested whole-update target")
@@ -151,13 +153,14 @@ if __name__ == "__main__":
     parser.add_argument("--grad-accumulation", type=int, default=16)
     parser.add_argument("--write-training-config", type=Path)
     parser.add_argument("--target-tokens", type=int)
+    parser.add_argument("--tier", choices=TIER_FLOPS, default="3e17")
     args = parser.parse_args()
     if min(args.world_size, args.grad_accumulation) < 1:
         parser.error("world size and gradient accumulation must be positive")
     if args.target_tokens is not None and (args.target_tokens < 1 or not args.write_training_config):
         parser.error("--target-tokens requires a positive value and --write-training-config")
     config = json.loads(args.config.read_text(encoding="utf-8"))
-    baseline = make_plan(config, args.world_size, args.grad_accumulation)
+    baseline = make_plan(config, args.world_size, args.grad_accumulation, args.tier)
     if args.write_training_config:
         import yaml
 

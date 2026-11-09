@@ -16,9 +16,13 @@ class Qwen3MoeTrainingConfig:
         if self.init_seed is not None:
             torch.manual_seed(self.init_seed)
         with torch.device(init_device):
-            return Qwen3MoeTrainingModel(
-                AutoModelForCausalLM.from_config(self.hf, attn_implementation="sdpa")
-            )
+            if getattr(self.hf, "local_attention_window", None):
+                from modeling_qwen3_windowed_moe import Qwen3WindowedMoeForCausalLM
+
+                lm = Qwen3WindowedMoeForCausalLM._from_config(self.hf, attn_implementation="sdpa")
+            else:
+                lm = AutoModelForCausalLM.from_config(self.hf, attn_implementation="sdpa")
+        return Qwen3MoeTrainingModel(lm)
 
 
 class Qwen3MoeTrainingModel(nn.Module):
@@ -34,9 +38,11 @@ class Qwen3MoeTrainingModel(nn.Module):
         self.to(device=device, dtype=torch.bfloat16)
         rotary.inv_freq = inv_freq.to(device=device, dtype=torch.float32)
         rotary.original_inv_freq = rotary.inv_freq.clone()
+        if torch.device(device).type == "cuda" and getattr(self.lm.config, "local_attention_window", None):
+            self.lm.set_attn_implementation("flash_attention_2")
 
     def forward(self, input_ids, *, route=False):
-        if input_ids.is_cuda:
+        if input_ids.is_cuda and self.lm.config._attn_implementation == "sdpa":
             with sdpa_kernel(SDPBackend.FLASH_ATTENTION):
                 return self._forward(input_ids, route)
         return self._forward(input_ids, route)
