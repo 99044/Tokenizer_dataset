@@ -237,15 +237,19 @@ def main():
         config.init_seed = seed
         model = config.build(init_device='cpu')
         model.init_weights(max_seq_len=context_length, device=device)
-        initialization_repairs = repair_zero_gdn_decay_rates(model)
-        if not is_qwen_moe:
+        if is_qwen_moe:
+            initialization_repairs = []
+            scaled_parameters = []
+            compressed_parameters = 0
+        else:
+            initialization_repairs = repair_zero_gdn_decay_rates(model)
             tie_output_weights(model)
-        scaled_parameters = scale_projections(
-            model, float(settings.get('initialization', {}).get('projection_scale', 1.0))
-        )
-        compressed_parameters = attach_compressed_attention(model, settings, device)
-        attach_dual_residual(model, settings)
-        attach_value_residual(model, settings)
+            scaled_parameters = scale_projections(
+                model, float(settings.get('initialization', {}).get('projection_scale', 1.0))
+            )
+            compressed_parameters = attach_compressed_attention(model, settings, device)
+            attach_dual_residual(model, settings)
+            attach_value_residual(model, settings)
         residual_parameters = sum(
             parameter.numel() for name, parameter in model.named_parameters()
             if '.dual_residual_mixing.' in name

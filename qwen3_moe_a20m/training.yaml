@@ -40,12 +40,12 @@ training:
   dtype: bfloat16
   max_steps: 3815
   micro_batch_size: 1
-  gradient_accumulation_steps: 16
+  gradient_accumulation_steps: 8
   gradient_checkpointing: false
   length_curriculum:
     kind: qwen3_moe_length_fp32
     version: 1
-    world_size: 4
+    world_size: 8
     tokens_per_update: 524288
     reference:
       context_length: 8192
@@ -62,7 +62,7 @@ training:
       stage_index: 0
       length: 2048
       micro_batch_size: 4
-      grad_accum_steps: 16
+      grad_accum_steps: 8
       tokens_per_update: 524288
       planned_flops_fraction: 0.2829813381452595
       first_step: 1
@@ -75,7 +75,7 @@ training:
       stage_index: 1
       length: 4096
       micro_batch_size: 2
-      grad_accum_steps: 16
+      grad_accum_steps: 8
       tokens_per_update: 524288
       planned_flops_fraction: 0.18363427062177792
       first_step: 1474
@@ -88,7 +88,7 @@ training:
       stage_index: 2
       length: 8192
       micro_batch_size: 1
-      grad_accum_steps: 16
+      grad_accum_steps: 8
       tokens_per_update: 524288
       planned_flops_fraction: 0.5333823146528085
       first_step: 2237
@@ -144,7 +144,7 @@ budget:
   flops_per_token_basis: 8192-token reference; use curriculum stage costs at runtime
 submission:
   budget_tier: 3e17
-  data_parallel_size: 4
+  data_parallel_size: 8
 logging:
   eval_batches: 8
   final_eval_batches: 64

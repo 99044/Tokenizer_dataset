@@ -11,8 +11,6 @@ eval_cache=$3
 output=$4
 python_bin=${PYTHON:-python}
 export TRAIN_CONFIG=${TRAIN_CONFIG:-"$root/qwen3_moe_a30m/training.yaml"}
-visible=${CUDA_VISIBLE_DEVICES:-0,1,2,3}
-eval_gpu=${EVAL_GPU:-${visible%%,*}}
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 export OMP_NUM_THREADS=${OMP_NUM_THREADS:-1}
 if [[ -e "$output" ]]; then
@@ -56,6 +54,8 @@ print(settings["training"]["max_steps"], settings["submission"]["data_parallel_s
 PY
 )
 read -r final_step ranks <<< "$plan"
+visible=${CUDA_VISIBLE_DEVICES:-$(seq -s, 0 "$((ranks-1))")}
+eval_gpu=${EVAL_GPU:-${visible%%,*}}
 mkdir -p -- "$(dirname -- "$output")"
 mkdir -- "$output"
 

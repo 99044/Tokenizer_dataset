@@ -7,6 +7,12 @@ shift 2
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 export OMP_NUM_THREADS=${OMP_NUM_THREADS:-1}
 export TOKEN_CACHE_VALIDATION_DIR=${TOKEN_CACHE_VALIDATION_DIR:-"$output/cache_validation"}
-exec "${PYTHON:-python}" -m torch.distributed.run --standalone --nproc-per-node="${NPROC_PER_NODE:-4}" \
-  "$root/training/src/train_ddp.py" --config "${TRAIN_CONFIG:-$root/qwen3_moe_a30m/training.yaml}" \
+python_bin=${PYTHON:-python}
+config=${TRAIN_CONFIG:-"$root/qwen3_moe_a30m/training.yaml"}
+ranks=${NPROC_PER_NODE:-}
+if [[ -z "$ranks" ]]; then
+    ranks=$("$python_bin" -c 'import sys,yaml; from pathlib import Path; print(yaml.safe_load(Path(sys.argv[1]).read_text()).get("submission", {}).get("data_parallel_size", 4))' "$config")
+fi
+exec "$python_bin" -m torch.distributed.run --standalone --nproc-per-node="$ranks" \
+  "$root/training/src/train_ddp.py" --config "$config" \
   --data-dir "$data" --output-dir "$output" "$@"
