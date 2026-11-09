@@ -31,10 +31,10 @@ PYTHONPATH="$root/training/src${PYTHONPATH:+:$PYTHONPATH}" \
 from pathlib import Path
 import sys
 import yaml
-from qwen3_moe_rules import validate_family_settings
+from qwen3_moe_token_rules import validate_qwen3_moe_settings
 
 settings = yaml.safe_load(Path(sys.argv[1]).read_text())
-validate_family_settings(settings, check_runtime=True)
+validate_qwen3_moe_settings(settings, check_runtime=True)
 devices = sys.argv[3].split(",")
 if settings["submission"]["budget_tier"] != sys.argv[2]:
     raise ValueError("Requested tier disagrees with TRAIN_CONFIG")
@@ -42,5 +42,6 @@ if len(devices) != settings["submission"]["data_parallel_size"] or len(set(devic
     raise ValueError("Visible GPU count differs from the fixed training plan")
 PY
 bash "$root/qwen3_moe_a30m/run_all.sh" "$@"
+cp -- "$TRAIN_CONFIG" "$4/training-config.yaml"
 "${PYTHON:-python}" "$root/training/audit_qwen3_moe_flops.py" \
-    --config "$TRAIN_CONFIG" --metrics "$4/train/metrics.jsonl" --output "$4/flops-report.json"
+    --config "$4/training-config.yaml" --metrics "$4/train/metrics.jsonl" --output "$4/flops-report.json"

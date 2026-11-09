@@ -32,9 +32,9 @@ def build_model_config(
         hf = model["hf_config"]
         validate_moe_activation_ratio(hf)
         if "architecture_family" in settings:
-            from qwen3_moe_rules import validate_family_settings
+            from qwen3_moe_token_rules import validate_qwen3_moe_settings
 
-            validate_family_settings(settings, check_runtime=True)
+            validate_qwen3_moe_settings(settings, check_runtime=True)
         if hf["vocab_size"] != vocab_size or hf["max_position_embeddings"] != model["context_length"]:
             raise ValueError("Qwen3 MoE vocabulary or context disagrees with the training configuration")
         if training["dtype"] != "bfloat16" or training.get("gradient_checkpointing", False):
