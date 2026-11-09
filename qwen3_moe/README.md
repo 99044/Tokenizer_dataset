@@ -17,8 +17,8 @@ recipes; they do not establish the best BPB on our data.
 | --- | --- | --- | --- | --- | --- | ---: |
 | 3e17 | 8 / 256 | 4 / 2 / 64 | 24 / 2 / 512 | 1/2 | 0.003 | 262,144 |
 | 1e18 | 12 / 384 | 6 / 2 / 64 | 24 / 2 / 768 | 1/2 | 0.002 | 524,288 |
-| 3e18 | 16 / 512 | 8 / 2 / 64 | 47 / 4 / 512 | 1/4 | 0.0015 | 524,288 |
-| 1e19 | 24 / 768 | 12 / 2 / 64 | 94 / 8 / 384 | 1/8 | 0.001 | 524,288 |
+| 3e18 | 16 / 512 | 8 / 2 / 64 | 47 / 4 / 512 | 1/4 | 0.0015 | 1,048,576 |
+| 1e19 | 24 / 768 | 12 / 2 / 64 | 94 / 8 / 384 | 1/8 | 0.001 | 1,048,576 |
 
 ## Shared scaling rule and minimum activation fraction
 
@@ -87,6 +87,45 @@ The 2K/4K/8K curriculum allocates 50%/20%/the remainder of compute, preserving
 global tokens per update. Each tier's step count is recalculated independently.
 Stage boundaries and ten milestones within the 8K stage receive validation
 and rolling checkpoints; the pipeline exports and scores the final checkpoint.
+
+Global batch is selected independently by tier. The two smaller recipes retain
+more optimizer updates; the larger two try a doubled batch to reduce optimizer
+and gradient-synchronization overhead. This is an unmeasured tradeoff, not a
+BPB optimum. The paper uses `512 * 2048 = 1,048,576` tokens/update
+([appendix A.3](https://arxiv.org/html/2605.11689#A3)), but does not establish
+that batch as optimal for our data, SOAP optimizer or FLOPs budgets.
+
+| Tier | Previous tokens/update | Selected tokens/update | Accumulation/rank | Previous updates | Selected updates |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 3e17 | 262,144 | 262,144 | 4 | 8,716 | 8,716 |
+| 1e18 | 524,288 | 524,288 | 8 | 6,006 | 6,006 |
+| 3e18 | 524,288 | 1,048,576 | 16 | 9,069 | 4,534 |
+| 1e19 | 524,288 | 1,048,576 | 16 | 10,750 | 5,375 |
+
+Each rank still processes 8192 tokens per physical micro-batch: 4/2/1 sequences
+at 2K/4K/8K. Larger accumulation does not itself increase the physical batch
+or GPU utilization; activation memory is approximately unchanged. The same
+total data still needs forward/backward passes. Fewer optimizer updates do
+not imply proportional wall-time speedup. Router-count collectives still
+occur for every micro-batch. Learning rate, betas, weight decay and SOAP
+preconditioner frequency retain their current per-update values; the resulting
+optimization trajectory changes and must be compared using validation BPB.
+
+Warmup/cooldown, validation/checkpoint milestones, stage boundaries and the
+complete-update FLOPs plan are regenerated for each chosen batch. The new
+`3e18` plan has 4,754,243,584 training tokens after rounding whole updates;
+`1e19` retains 5,636,096,000. Use a fresh output directory for a changed batch.
+
+For a per-tier batch experiment, use `--tokens-per-update` (a multiple of
+65536 for eight GPUs). This does not change the architecture family:
+
+```bash
+# Example: compare the previous 0.524M batch against the new 3e18 default.
+python qwen3_moe/plan.py --tier 3e18 --tokens-per-update 524288 \
+  --output-dir runs/configs-batch-comparison
+TRAIN_CONFIG="$PWD/runs/configs-batch-comparison/3e18/training.yaml" \
+  bash qwen3_moe/run_all.sh 3e18 "$TRAIN_CACHE" "$TOKENIZER_DIR" "$EVAL_CACHE" "$RUNS/3e18-batch524k"
+```
 
 ## Generate and validate
 
@@ -232,7 +271,7 @@ bash qwen3_moe/run_all.sh 1e19 "$TRAIN_CACHE" "$TOKENIZER_DIR" "$EVAL_CACHE" "$R
 ```
 
 These commands use eight GPUs, FP32 SOAP training, CPU HF export and one-GPU
-8K packed BPB evaluation with fusion disabled for MoE. Evaluation batches
+8K packed BPB evaluation with Hopper backend selection and RMSNorm fusion. Evaluation batches
 default to 8/4/1/1; `EVAL_BATCH_SIZE` can override this after a memory check.
 The result is `OUTPUT/eval-result.json`. Evaluation batch size changes memory
 and throughput, not the intended scoring context or byte denominator.

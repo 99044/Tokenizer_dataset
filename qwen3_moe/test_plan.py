@@ -1,16 +1,19 @@
 """Check budget safety, runtime schedules and reproducible recipe artifacts."""
 
 import copy
+from contextlib import redirect_stdout
+import io
 import json
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 
 import yaml
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT.parent))
-from qwen3_moe.plan import TIERS, make_recipe
+from qwen3_moe.plan import TIERS, main, make_recipe
 from qwen3_moe_a30m.plan import make_plan, make_training_settings
 from qwen3_flops import qwen3_moe_parameters, validate_moe_activation_ratio
 from qwen3_moe_rules import maximum_expert_count, validate_family_settings
@@ -54,6 +57,43 @@ class RecipeTests(unittest.TestCase):
             for config in configs:
                 validate_moe_activation_ratio(config)
 
+    def test_larger_batches_keep_microbatch_and_recompute_budget_and_runtime(self):
+        for tier, preset in TIERS.items():
+            old_config, old_settings, old_budget = make_recipe(tier)
+            for tokens in (2 * old_budget["tokens_per_update"], 4 * old_budget["tokens_per_update"]):
+                with self.subTest(tier=tier, tokens=tokens):
+                    config, settings, budget = make_recipe(tier, tokens_per_update=tokens)
+                    training = settings["training"]
+                    accumulation = tokens // (8 * 8192)
+                    self.assertEqual(config, old_config)
+                    self.assertEqual(settings["architecture_family"], old_settings["architecture_family"])
+                    self.assertEqual(settings["optimizer"], old_settings["optimizer"])
+                    self.assertEqual(training["gradient_accumulation_steps"], accumulation)
+                    self.assertEqual(budget["tokens_per_update"], tokens)
+                    self.assertLess(training["max_steps"], old_budget["optimizer_updates"])
+                    self.assertEqual(budget["planned_training_tokens"], tokens * training["max_steps"])
+                    validate_curriculum(settings, 8, 1, accumulation, training["max_steps"])
+                    validate_family_settings(settings)
+                    self.assertLessEqual(budget["estimated_training_flops"], preset["flops"])
+                    self.assertGreaterEqual(100 * budget["estimated_training_flops"], 99 * preset["flops"])
+                    for stage, old in zip(training["length_curriculum"]["stages"],
+                                          old_settings["training"]["length_curriculum"]["stages"]):
+                        self.assertEqual(stage["micro_batch_size"], old["micro_batch_size"])
+                        self.assertEqual(stage["grad_accum_steps"], accumulation)
+                        self.assertEqual(stage["flops_per_update"] * old_budget["tokens_per_update"],
+                                         old["flops_per_update"] * tokens)
+                    self.assertEqual(curriculum_lr_factor(settings, training["max_steps"]), 0)
+
+    def test_batch_cli_writes_a_directly_usable_tier(self):
+        with tempfile.TemporaryDirectory() as temp, redirect_stdout(io.StringIO()) as output:
+            main(["--tier", "3e17", "--tokens-per-update", "1048576", "--output-dir", temp])
+            summary = json.loads(output.getvalue())[0]
+            settings = yaml.safe_load((Path(temp) / "3e17/training.yaml").read_text())
+            self.assertEqual(summary["tokens_per_update"], 1048576)
+            self.assertEqual(summary["optimizer_updates"], settings["training"]["max_steps"])
+            self.assertEqual(summary["optimizer_updates"], 2178)
+            validate_curriculum(settings, 8, 1, 16, settings["training"]["max_steps"])
+
     def test_more_experts_add_capacity_and_recompute_the_router_cost(self):
         config, _, budget = make_recipe("3e17", expert_capacity_fraction=0.8)
         larger, _, more = make_recipe("3e17")
@@ -71,12 +111,15 @@ class RecipeTests(unittest.TestCase):
             else:
                 broken["submission"]["data_parallel_size"] = 4
             with self.assertRaises(ValueError):
-                validate_curriculum(broken, 8, 1, 8, broken["training"]["max_steps"])
+                validate_curriculum(broken, 8, 1, settings["training"]["gradient_accumulation_steps"],
+                                    broken["training"]["max_steps"])
 
     def test_invalid_candidates_are_rejected(self):
         for options in ({"granularity_shift": 2}, {"granularity_shift": True},
                         {"expert_capacity_fraction": 1.1}, {"expert_alignment": 3},
-                        {"learning_rate": float("nan")}, {"learning_rate": 0}):
+                        {"learning_rate": float("nan")}, {"learning_rate": 0},
+                        *({"tokens_per_update": value} for value in
+                          (True, 0, -65536, 65535, 65537, 1048576.0, 65536 * 10**9))):
             with self.subTest(options=options), self.assertRaises(ValueError):
                 make_recipe("3e17", **options)
 

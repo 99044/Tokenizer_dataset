@@ -24,13 +24,24 @@ from qwen3_moe_rules import (
 TIERS = {
     "3e17": dict(flops=3 * 10**17, accumulation=4, learning_rate=0.003),
     "1e18": dict(flops=10**18, accumulation=8, learning_rate=0.002),
-    "3e18": dict(flops=3 * 10**18, accumulation=8, learning_rate=0.0015),
-    "1e19": dict(flops=10**19, accumulation=8, learning_rate=0.001),
+    "3e18": dict(flops=3 * 10**18, accumulation=16, learning_rate=0.0015),
+    "1e19": dict(flops=10**19, accumulation=16, learning_rate=0.001),
 }
 
 
-def make_recipe(tier, *, granularity_shift=0, expert_capacity_fraction=1.0, expert_alignment=1, learning_rate=None):
+def make_recipe(tier, *, granularity_shift=0, expert_capacity_fraction=1.0, expert_alignment=1,
+                learning_rate=None, tokens_per_update=None):
     preset = TIERS[tier]
+    # Keep each rank's physical micro-batch at 8192 tokens throughout the
+    # curriculum. Larger global batches use more accumulation, not more memory.
+    tokens_per_microbatch = 8 * 8192
+    if tokens_per_update is None:
+        accumulation = preset["accumulation"]
+    else:
+        if (isinstance(tokens_per_update, bool) or not isinstance(tokens_per_update, int)
+                or tokens_per_update < tokens_per_microbatch or tokens_per_update % tokens_per_microbatch):
+            raise ValueError("tokens_per_update must be a positive integer multiple of 65536 (8 GPUs x 8192 tokens)")
+        accumulation = tokens_per_update // tokens_per_microbatch
     family = make_family(granularity_shift, expert_capacity_fraction, expert_alignment)
     lr = preset["learning_rate"] if learning_rate is None else learning_rate
     if isinstance(lr, bool) or not math.isfinite(lr) or lr <= 0:
@@ -38,8 +49,10 @@ def make_recipe(tier, *, granularity_shift=0, expert_capacity_fraction=1.0, expe
 
     config = architecture_for_hidden(HIDDEN_BY_TIER[tier], family)
     top_k, experts = config["num_experts_per_tok"], config["num_experts"]
-    baseline = make_plan(config, world_size=8, grad_accumulation=preset["accumulation"],
+    baseline = make_plan(config, world_size=8, grad_accumulation=accumulation,
                          target_flops=preset["flops"], flops_protocol=PROTOCOL)
+    if baseline["optimizer_updates"] < 2:
+        raise ValueError("tokens_per_update is too large for the FLOPs budget")
     settings = make_training_settings(
         config, baseline, budget_tier=tier,
         run_name=f"qwen3_moe_{tier}_e{experts}_k{top_k}_soap",
@@ -52,6 +65,8 @@ def make_recipe(tier, *, granularity_shift=0, expert_capacity_fraction=1.0, expe
     )
     activation = validate_family_settings(settings)
     curriculum = settings["training"]["length_curriculum"]
+    if not 99 * preset["flops"] <= 100 * curriculum["planned_training_flops"] <= 100 * preset["flops"]:
+        raise ValueError("tokens_per_update leaves too much unused compute; require 99%-100% of the FLOPs budget")
     # Evaluate each stage boundary and each tenth of the final 8K stage.
     # Short-context CE is useful for stability; compare candidates at final 8K.
     full = curriculum["stages"][-1]
@@ -112,6 +127,8 @@ def main(argv=None):
     parser.add_argument("--expert-capacity-fraction", type=float, default=1.0)
     parser.add_argument("--expert-alignment", type=int, choices=(1, 4, 8, 16), default=1)
     parser.add_argument("--learning-rate", type=float)
+    parser.add_argument("--tokens-per-update", type=int,
+                        help="Global batch in tokens; multiple of 65536. 1048576 matches the paper's batch.")
     parser.add_argument("--output-dir", type=Path, help="Write TIER/{config.json,training.yaml,budget.json}")
     args = parser.parse_args(argv)
     if args.tier and (args.granularity_shift != 0 or args.expert_capacity_fraction != 1.0 or args.expert_alignment != 1):
@@ -125,6 +142,7 @@ def main(argv=None):
                 tier, granularity_shift=args.granularity_shift,
                 expert_capacity_fraction=args.expert_capacity_fraction, expert_alignment=args.expert_alignment,
                 learning_rate=args.learning_rate,
+                tokens_per_update=args.tokens_per_update,
             )
         except ValueError as error:
             parser.error(str(error))
@@ -141,6 +159,7 @@ def main(argv=None):
             "total_non_vocabulary_parameters", "active_non_vocabulary_parameters",
             "active_non_vocabulary_fraction", "architecture_family_id",
             "expert_granularity", "expert_activation_sparsity", "optimizer_updates",
+            "tokens_per_update",
             "planned_training_tokens", "estimated_training_flops",
             "persistent_state_lower_bound_gib_per_gpu",
         )})

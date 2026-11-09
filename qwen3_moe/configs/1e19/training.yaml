@@ -39,69 +39,69 @@ model:
     router_z_loss_coef: 0.001
 training:
   dtype: bfloat16
-  max_steps: 10750
+  max_steps: 5375
   micro_batch_size: 1
-  gradient_accumulation_steps: 8
+  gradient_accumulation_steps: 16
   gradient_checkpointing: false
   length_curriculum:
     kind: qwen3_moe_length_fp32
     version: 1
     world_size: 8
-    tokens_per_update: 524288
+    tokens_per_update: 1048576
     reference:
       context_length: 8192
-      max_steps: 8484
+      max_steps: 4242
       planned_training_flops: 9999111264441470976
       planned_training_tokens: 4448059392
       flops_per_token_numerator: 1150961467961
       flops_per_token_denominator: 512
-      warmup_steps: 170
-      cooldown_steps: 1697
+      warmup_steps: 85
+      cooldown_steps: 848
       final_lr_ratio: 0.0
     stages:
     - stage: short
       stage_index: 0
       length: 2048
       micro_batch_size: 4
-      grad_accum_steps: 8
-      tokens_per_update: 524288
+      grad_accum_steps: 16
+      tokens_per_update: 1048576
       requested_flops_fraction: 0.5
       first_step: 1
-      last_step: 6080
-      steps: 6080
-      flops_per_update: 822342775792640
+      last_step: 3040
+      steps: 3040
+      flops_per_update: 1644685551585280
       flops: 4999844076819251200
       cumulative_flops: 4999844076819251200
     - stage: medium
       stage_index: 1
       length: 4096
       micro_batch_size: 2
-      grad_accum_steps: 8
-      tokens_per_update: 524288
+      grad_accum_steps: 16
+      tokens_per_update: 1048576
       requested_flops_fraction: 0.2
-      first_step: 6081
-      last_step: 8205
-      steps: 2125
-      flops_per_update: 941090031592448
-      flops: 1999816317133952000
-      cumulative_flops: 6999660393953203200
+      first_step: 3041
+      last_step: 4102
+      steps: 1062
+      flops_per_update: 1882180063184896
+      flops: 1998875227102359552
+      cumulative_flops: 6998719303921610752
     - stage: full
       stage_index: 2
       length: 8192
       micro_batch_size: 1
-      grad_accum_steps: 8
-      tokens_per_update: 524288
+      grad_accum_steps: 16
+      tokens_per_update: 1048576
       requested_flops_fraction: 0.3
-      first_step: 8206
-      last_step: 10750
-      steps: 2545
-      flops_per_update: 1178584543192064
-      flops: 2999497662423802880
-      cumulative_flops: 9999158056377006080
-    max_steps: 10750
-    planned_training_flops: 9999158056377006080
+      first_step: 4103
+      last_step: 5375
+      steps: 1273
+      flops_per_update: 2357169086384128
+      flops: 3000676246966994944
+      cumulative_flops: 9999395550888605696
+    max_steps: 5375
+    planned_training_flops: 9999395550888605696
     planned_training_tokens: 5636096000
-    unused_reference_flops: 841943622993920
+    unused_reference_flops: 604449111394304
     accounting:
       kind: scicomp26-megatron-qwen3-moe-router-zloss-v2
       official_ledger: false
@@ -133,21 +133,21 @@ optimizer:
   max_precond_dim: 1024
 scheduler:
   name: linear_cooldown
-  warmup_steps: 244
-  cooldown_steps: 1698
+  warmup_steps: 122
+  cooldown_steps: 849
   final_lr_ratio: 0.0
   warmup_fraction: 0.020037718057520037
-  cooldown_fraction: 0.20002357378595004
+  cooldown_fraction: 0.1999057048561999
 data:
   format: npy_packed_tokens
   tokenizer_json_sha256: 6f1812b3fbf8758220be646974072ef08c66df2d2d5ef9d398f0e158b9ee947c
 scaling:
   expected_total_parameters: 2068516608
-  tokens_per_update: 524288
+  tokens_per_update: 1048576
   flops_accounting: scicomp26-megatron-qwen3-moe-router-zloss-v2
 budget:
   total_training_flops: 10000000000000000000
-  planned_training_flops: 9999158056377006080
+  planned_training_flops: 9999395550888605696
   planned_training_tokens: 5636096000
   flops_per_token_numerator: 1150961467961
   flops_per_token_denominator: 512
@@ -160,20 +160,20 @@ logging:
   eval_batches: 8
   final_eval_batches: 64
   checkpoint_keep_last: 2
-  eval_every_steps: 10750
-  checkpoint_every_steps: 10750
+  eval_every_steps: 5375
+  checkpoint_every_steps: 5375
   checkpoint_steps: &id001
-  - 6080
-  - 8205
-  - 8459
-  - 8714
-  - 8969
-  - 9223
-  - 9477
-  - 9732
-  - 9987
-  - 10241
-  - 10495
+  - 3040
+  - 4102
+  - 4229
+  - 4357
+  - 4484
+  - 4611
+  - 4738
+  - 4866
+  - 4993
+  - 5120
+  - 5248
   eval_steps: *id001
 architecture_family:
   schema: qwen3-moe-scaling-v2
