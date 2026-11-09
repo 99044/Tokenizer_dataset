@@ -1,0 +1,71 @@
+{
+  "tokenizer": {
+    "revision": "tok_bpe24k_v1",
+    "vocab_size": 24576,
+    "tokenizer_json_sha256": "6f1812b3fbf8758220be646974072ef08c66df2d2d5ef9d398f0e158b9ee947c"
+  },
+  "context_length": 8192,
+  "training_archive": {
+    "filename": "token_cache_24k_v1_full_20261101.tar.zst",
+    "bytes": 31657767241,
+    "sha256": "168e51ac7630a3988715bdec1d5e5e68daeaf4eb78d574268c14d54156cac4dd",
+    "uncompressed_tar_bytes": 275703152640,
+    "members": {
+      ".validation/official_a.npy.json": 498,
+      ".validation/official_a_is_text.npy.json": 524,
+      ".validation/train.npy.json": 498,
+      ".validation/train_is_text.npy.json": 525,
+      ".validation/validation.npy.json": 498,
+      ".validation/validation_is_text.npy.json": 524,
+      "metadata.json": 9420,
+      "official_a.npy": 441445916,
+      "official_a_is_text.npy": 110361575,
+      "packing.log": 22364,
+      "train.npy": 219614764764,
+      "train_is_text.npy": 54903691287,
+      "validation.npy": 506267568,
+      "validation_is_text.npy": 126566988
+    },
+    "oss_uri": "oss://scicomp26-handoff/scicomp26/data/token_cache_24k_v1_full_20261101.tar.zst",
+    "oss_region": "cn-beijing"
+  },
+  "evaluation_cache": {
+    "directory": "tok_bpe24k_v1_dolma3_mix_100M_a_npy",
+    "stream_tokens": 110361447,
+    "scored_tokens": 110295405,
+    "scored_bytes": 445910984,
+    "dataset_sha256": "4689036c6d9b413b03b68f0042509e0f3ea7b4d98cb210da4ef5b157a18c9f5c",
+    "archive": {
+      "filename": "tok_bpe24k_v1_dolma3_mix_100M_a_npy.tar.zst",
+      "bytes": 150646898,
+      "sha256": "c5f97ebc75117696f11dc364f9661493566ceb1c175ec070e65ee9fcbc056a34",
+      "parts": [
+        {
+          "filename": "tok_bpe24k_v1_dolma3_mix_100M_a_npy.tar.zst.part-00",
+          "sha256": "5758deb97aff1916b23da332e9a1ba53a4c4ad7ed16379b98792d4b68e8910a5",
+          "bytes": 33554432
+        },
+        {
+          "filename": "tok_bpe24k_v1_dolma3_mix_100M_a_npy.tar.zst.part-01",
+          "sha256": "a03cc027f2d6d8d72ff7ed0d596d84256830664ddf62b963b467101539370065",
+          "bytes": 33554432
+        },
+        {
+          "filename": "tok_bpe24k_v1_dolma3_mix_100M_a_npy.tar.zst.part-02",
+          "sha256": "bb04408dc6fec01e1911ef9bd8ad3ac85d27fb57a643e91b2c3a1898a7941376",
+          "bytes": 33554432
+        },
+        {
+          "filename": "tok_bpe24k_v1_dolma3_mix_100M_a_npy.tar.zst.part-03",
+          "sha256": "896bbadabf649e8c2ace0efea837fe268d8eba69ab02b7baf1b20b8291c76ac9",
+          "bytes": 33554432
+        },
+        {
+          "filename": "tok_bpe24k_v1_dolma3_mix_100M_a_npy.tar.zst.part-04",
+          "sha256": "06dbd12c12bed3ce924a5401e1e39743b91d427198434c578045dfb94a66cd65",
+          "bytes": 16429170
+        }
+      ]
+    }
+  }
+}

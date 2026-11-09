@@ -1,0 +1,27 @@
+{
+  "revision": "tok_bpe24k_v1",
+  "tokenizer_type": "ByteLevelBPE",
+  "vocab_size_requested": 24576,
+  "vocab_size_actual": 24576,
+  "sample_percent": 5,
+  "sample_rule": "sha256(id when present else raw text)[:8] as big-endian integer % 100 < sample_percent",
+  "source": "/home/pretrain10/dolma3_official/splits_v2/train",
+  "normalizer": "none; input is already NFC-normalized by splits_v2 policy",
+  "pre_tokenizer": "ByteLevel(add_prefix_space=False, trim_offsets=False)",
+  "min_frequency": 2,
+  "special_tokens": {
+    "unk": "<|scicomp26_unk_v1|>",
+    "eos": "<|scicomp26_eos_v1|>",
+    "pad": "<|scicomp26_pad_v1|>",
+    "bos": "<|scicomp26_bos_v1|>"
+  },
+  "special_token_ids": {
+    "unk": 0,
+    "eos": 2,
+    "pad": 3,
+    "bos": 1
+  },
+  "add_special_tokens_default": false,
+  "document_eos_policy": "packing code prepends exactly one eos before each source document",
+  "offline_load": "AutoTokenizer.from_pretrained(path, local_files_only=True)"
+}
