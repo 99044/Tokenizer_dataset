@@ -166,6 +166,8 @@ def main():
     p.add_argument('--output-dir', type=Path, required=True)
     p.add_argument('--max-steps', type=int)
     p.add_argument('--stop-after', type=int, help='在此累计 step 停止，但不改变原学习率计划')
+    p.add_argument('--time-limit-seconds', type=int,
+                   help='Save and stop after an optimizer update once training reaches this many seconds')
     p.add_argument('--micro-batch-size', type=int)
     p.add_argument('--grad-accum-steps', type=int)
     p.add_argument('--learning-rate', type=float)
@@ -190,6 +192,8 @@ def main():
             raise ValueError(f'{name} 必须为正数')
     if args.learning_rate <= 0 or not 0 <= args.warmup_steps < args.max_steps:
         raise ValueError('检查 learning-rate 和 warmup-steps')
+    if args.time_limit_seconds is not None and args.time_limit_seconds < 1:
+        raise ValueError('time-limit-seconds must be positive')
     stop_step = args.stop_after if args.stop_after is not None else args.max_steps
     if not 1 <= stop_step <= args.max_steps:
         raise ValueError('stop-after 必须在 1 到 max-steps 之间')
@@ -480,6 +484,7 @@ def main():
                 raise RuntimeError(f'W&B initialization failed: {wandb_error[0]}')
         dist.barrier()
         run_started = time.perf_counter()
+        deadline = None if args.time_limit_seconds is None else run_started + args.time_limit_seconds
         force_fp32_gdn = settings['training'].get('gdn_recurrent_fp32', False)
         if not isinstance(force_fp32_gdn, bool):
             raise ValueError('training.gdn_recurrent_fp32 must be a boolean')
@@ -563,9 +568,10 @@ def main():
                 grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 local_bad = not bool(torch.isfinite(grad_norm).item()) or not bool(torch.isfinite(local_loss).item())
                 local_spike = retry_threshold is not None and grad_norm.item() > retry_threshold
-                flags = torch.tensor([int(local_bad), int(local_spike)], device=device)
+                timed_out = rank == 0 and deadline is not None and time.perf_counter() >= deadline
+                flags = torch.tensor([int(local_bad), int(local_spike), int(timed_out)], device=device)
                 dist.all_reduce(flags, op=dist.ReduceOp.MAX)
-                nonfinite_on_any_rank, spike_on_any_rank = map(bool, flags.tolist())
+                nonfinite_on_any_rank, spike_on_any_rank, deadline_reached = map(bool, flags.tolist())
                 action = gradient_recovery_action(
                     nonfinite_on_any_rank, spike_on_any_rank, fp32_step,
                     retry_threshold is not None,
@@ -640,7 +646,8 @@ def main():
                     'train/completed_flops': curriculum_completed_flops(settings, step),
                 })
                 stage_boundary = step == stage['last_step']
-            if step % args.eval_every == 0 or step in eval_steps or step == stop_step:
+            final_step = step == stop_step or deadline_reached
+            if step % args.eval_every == 0 or step in eval_steps or final_step:
                 eval_batches = args.eval_batches
                 if step == args.max_steps:
                     eval_batches = int(
@@ -656,6 +663,8 @@ def main():
                 metrics['validation/token_nll'] = validation_loss
                 metrics['validation/batches'] = eval_batches
             metrics['elapsed_seconds'] = time.perf_counter() - run_started
+            if deadline_reached and step < stop_step:
+                metrics['train/stop_reason'] = 'time_limit'
             if rank == 0:
                 if ema is not None:
                     metrics['ema/updates'] = ema.updates
@@ -666,7 +675,7 @@ def main():
                 if wandb_run is not None:
                     wandb_run.log(metrics, step=step)
 
-            if step % args.save_every == 0 or step in checkpoint_steps or step == stop_step or stage_boundary:
+            if step % args.save_every == 0 or step in checkpoint_steps or final_step or stage_boundary:
                 rng = {'cpu': torch.get_rng_state(), 'cuda': torch.cuda.get_rng_state(device)}
                 all_rng = [None] * world
                 dist.all_gather_object(all_rng, rng)
@@ -699,6 +708,8 @@ def main():
                         for old_path in checkpoints[:-keep_last]:
                             old_path.unlink()
                 dist.barrier()
+            if final_step:
+                break
     finally:
         failed = sys.exc_info()[0] is not None
         try:

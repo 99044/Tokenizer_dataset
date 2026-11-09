@@ -13,6 +13,19 @@ from qwen3_moe_flops import PROTOCOL
 ROOT = Path(__file__).resolve().parents[2]
 HIDDEN_BY_TIER = {"3e17": 256, "1e18": 384, "3e18": 512, "1e19": 768}
 
+# Dense indices are zero-based. The latter three match the all-MoE baseline's
+# total FFN weights, including dense FFNs, while reducing router invocations.
+HYBRID_VARIANTS = {
+    "01-front2-e24": ((0, 1), 24),
+    "02-front4-e24": ((0, 1, 2, 3), 24),
+    "03-back4-e24": ((4, 5, 6, 7), 24),
+    "04-alternate-e24": ((0, 2, 4, 6), 24),
+    "05-bookend-e24": ((0, 1, 6, 7), 24),
+    "06-front4-e46": ((0, 1, 2, 3), 46),
+    "07-alternate-e46": ((0, 2, 4, 6), 46),
+    "08-front6-e90": ((0, 1, 2, 3, 4, 5), 90),
+}
+
 
 def maximum_expert_count(config):
     """Largest integer E with (A + E*R + K*P)/(A + E*(R+P)) >= 1/10."""
@@ -41,6 +54,11 @@ def architecture_for_hidden(hidden, family):
         num_experts=top_k, num_experts_per_tok=top_k,
         router_aux_loss_coef=0.001, router_z_loss_coef=0.001,
     )
+    if "hybrid_variant" in family:
+        if hidden != HIDDEN_BY_TIER["3e17"]:
+            raise ValueError("The hybrid experiments define the 3e17 architecture only")
+        dense_layers, experts = HYBRID_VARIANTS[family["hybrid_variant"]]
+        return dict(config, mlp_only_layers=list(dense_layers), num_experts=experts)
     maximum = maximum_expert_count(config)
     count = int(maximum * Fraction(str(family["expert_capacity_fraction"])))
     alignment = family["expert_alignment"]
@@ -50,7 +68,7 @@ def architecture_for_hidden(hidden, family):
     return config
 
 
-def make_family(granularity_shift=0, expert_capacity_fraction=1.0, expert_alignment=1):
+def make_family(granularity_shift=0, expert_capacity_fraction=1.0, expert_alignment=1, *, hybrid_variant=None):
     if isinstance(granularity_shift, bool) or not isinstance(granularity_shift, int) or granularity_shift not in (-1, 0, 1):
         raise ValueError("Granularity shift must be -1, 0 or 1")
     if (isinstance(expert_capacity_fraction, bool) or not isinstance(expert_capacity_fraction, (int, float))
@@ -89,7 +107,22 @@ def make_family(granularity_shift=0, expert_capacity_fraction=1.0, expert_alignm
         "base_config_sha256": hashlib.sha256((ROOT / "qwen3_moe_a20m/config.json").read_bytes()).hexdigest(),
         "generation_code_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
     }
-    for hidden in HIDDEN_BY_TIER.values():
+    sizes = HIDDEN_BY_TIER.values()
+    if hybrid_variant is not None:
+        if hybrid_variant not in HYBRID_VARIANTS or (granularity_shift, expert_capacity_fraction, expert_alignment) != (0, 1.0, 1):
+            raise ValueError("Hybrid variants use their declared fixed 3e17 expert recipe")
+        family["hybrid_variant"] = hybrid_variant
+        family["hidden_by_tier"] = {"3e17": HIDDEN_BY_TIER["3e17"]}
+        family["fixed_mechanisms"]["layer_type"] = "stock Qwen3 decoder with declared dense and MoE FFNs"
+        family["fixed_mechanisms"]["connections"] = "pre-norm residual attention followed by residual FFN"
+        dense_layers, experts = HYBRID_VARIANTS[hybrid_variant]
+        family["generation_rules"].update(mlp_only_layers=list(dense_layers), expert_count=experts)
+        family["generation_rules"].pop("E_max")
+        sizes = family["hidden_by_tier"].values()
+    family["layer_pattern_code_sha256"] = hashlib.sha256(
+        (ROOT / "training/src/qwen3_moe_layers.py").read_bytes()
+    ).hexdigest()
+    for hidden in sizes:
         validate_moe_activation_ratio(architecture_for_hidden(hidden, family))
     family["family_id"] = hashlib.sha256(json.dumps(family, sort_keys=True).encode()).hexdigest()
     return family
@@ -99,16 +132,19 @@ def validate_family_settings(settings, *, check_runtime=False):
     family = settings.get("architecture_family")
     if not isinstance(family, dict):
         raise ValueError("Missing predeclared architecture_family")
-    expected = make_family(family.get("granularity_shift"), family.get("expert_capacity_fraction"), family.get("expert_alignment"))
+    expected = make_family(
+        family.get("granularity_shift"), family.get("expert_capacity_fraction"),
+        family.get("expert_alignment"), hybrid_variant=family.get("hybrid_variant"),
+    )
     if family != expected:
         raise ValueError("Architecture family, generation rules or model source version changed")
     if settings.get("budget", {}).get("flops_protocol") != PROTOCOL:
         raise ValueError("This family requires the competition-reference MoE FLOPs protocol")
     tier = settings["submission"]["budget_tier"]
-    if tier not in HIDDEN_BY_TIER:
-        raise ValueError("Unknown architecture scale")
+    if tier not in expected["hidden_by_tier"]:
+        raise ValueError("Tier is outside the declared architecture family")
     config = settings["model"]["hf_config"]
-    if config != architecture_for_hidden(HIDDEN_BY_TIER[tier], expected):
+    if config != architecture_for_hidden(expected["hidden_by_tier"][tier], expected):
         raise ValueError("HF architecture differs from its predeclared scaling rule")
     if check_runtime and version("transformers") != family["transformers_version"]:
         raise ValueError("Runtime Transformers version differs from the declared model code version")

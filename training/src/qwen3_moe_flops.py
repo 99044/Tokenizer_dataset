@@ -14,6 +14,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from graph_accounting import gemm_operations, operation_flops
+from qwen3_moe_layers import qwen3_moe_layer_pattern
 
 PROTOCOL = "scicomp26-megatron-qwen3-moe-router-zloss-v2"
 REFERENCE = Path(__file__).with_name("flops_reference")
@@ -47,7 +48,7 @@ def reference_flops(config, sequence, micro_batch_size=1):
         num_query_groups=config["num_key_value_heads"], kv_channels=config["head_dim"],
         group_query_attention=True, multi_latent_attention=False, attention_output_gate=False,
         num_experts=config["num_experts"], moe_router_topk=config["num_experts_per_tok"],
-        moe_layer_freq=1, moe_ffn_hidden_size=config["moe_intermediate_size"],
+        moe_layer_freq=qwen3_moe_layer_pattern(config), moe_ffn_hidden_size=config["moe_intermediate_size"],
         ffn_hidden_size=config["intermediate_size"], moe_shared_expert_intermediate_size=None,
         moe_latent_size=None, mtp_num_layers=None, experimental_attention_variant=None,
         swiglu=True, padded_vocab_size=config["vocab_size"],
@@ -63,8 +64,11 @@ def routing_ledger(config, tokens, *, include_input_scatter=True, include_loss_w
     Dense zero-buffer materialization, indexing, comparisons and casts are not
     extra logical floating-point arithmetic. Active-path scatter additions are.
     """
-    layers, hidden, experts, top_k = (config[k] for k in (
-        "num_hidden_layers", "hidden_size", "num_experts", "num_experts_per_tok"))
+    layers = sum(qwen3_moe_layer_pattern(config))
+    if not layers:
+        return []
+    hidden, experts, top_k = (config[k] for k in (
+        "hidden_size", "num_experts", "num_experts_per_tok"))
     if not config["norm_topk_prob"]:
         raise ValueError("This routing ledger requires normalized top-k probabilities")
     operations = []
@@ -153,25 +157,28 @@ def cost_breakdown(config, sequence, micro_batch_size=1):
     if (isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 2
             or isinstance(micro_batch_size, bool) or not isinstance(micro_batch_size, int) or micro_batch_size < 1):
         raise ValueError("Sequence length >=2 and a positive integer micro-batch are required")
-    if config.get("decoder_sparse_step", 1) != 1 or config.get("mlp_only_layers", []):
-        raise ValueError("The reference adapter requires homogeneous MoE in every layer")
     tokens = micro_batch_size * sequence
     layers, hidden = config["num_hidden_layers"], config["hidden_size"]
+    moe_layers = sum(qwen3_moe_layer_pattern(config))
+    dense_layers = layers - moe_layers
     query = config["num_attention_heads"] * config["head_dim"]
     kv = config["num_key_value_heads"] * config["head_dim"]
     base = {
         "attention_projections": 6 * tokens * layers * hidden * (2 * query + 2 * kv),
         "attention_core": 6 * micro_batch_size * sequence**2 * layers * query,
-        "active_expert_projections": 18 * tokens * layers * hidden * config["num_experts_per_tok"] * config["moe_intermediate_size"],
+        "active_expert_projections": (18 * tokens * moe_layers * hidden
+                                      * config["num_experts_per_tok"] * config["moe_intermediate_size"]),
         "lm_head": 6 * tokens * hidden * config["vocab_size"],
     }
+    if dense_layers:
+        base["dense_ffn_projections"] = 18 * tokens * dense_layers * hidden * config["intermediate_size"]
     reference = reference_flops(config, sequence, micro_batch_size)
     if sum(base.values()) != reference:
         raise ValueError("Matrix decomposition disagrees with the pinned Megatron reference")
     operations = routing_ledger(config, tokens)
     phases = {phase: sum(operation_flops(op) for op in operations if op["phase"] == phase)
               for phase in ("forward", "backward")}
-    projection = 6 * tokens * layers * hidden * config["num_experts"]
+    projection = 6 * tokens * moe_layers * hidden * config["num_experts"]
     _, manifest = load_reference()
     return {
         "protocol": PROTOCOL, "estimated_total": reference + sum(phases.values()),

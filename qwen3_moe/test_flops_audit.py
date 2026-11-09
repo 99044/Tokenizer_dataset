@@ -36,6 +36,16 @@ class TrainingPathAuditTests(unittest.TestCase):
             write(rows[:-1])
             with self.assertRaisesRegex(ValueError, "incomplete"):
                 audit(settings, path)
+            with self.assertRaisesRegex(ValueError, "incomplete"):
+                audit(settings, path, allow_time_limit=True)
+            limited = [dict(row) for row in rows[:2]]
+            limited[-1]["train/stop_reason"] = "time_limit"
+            write(limited)
+            result = audit(settings, path, allow_time_limit=True)
+            self.assertEqual(result["status"], "passed_time_limited_prefix_audit")
+            self.assertEqual(result["actual_training_flops"], limited[-1]["train/completed_flops"])
+            self.assertEqual(result["final_context_length"], 2048)
+            self.assertFalse(result["within_one_percent"])
             broken = [dict(row) for row in rows]
             broken[-1]["train/context_length"] = 2048
             write(broken)

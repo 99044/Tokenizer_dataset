@@ -409,3 +409,57 @@ the final scoring set for the selected recipe. CE during 2K/4K stages is a
 stability diagnostic, not an 8K BPB result.
 Do not combine points from different architecture families into a submitted
 four-tier scaling curve.
+
+## Dense/MoE overnight experiment
+
+Run on the eight-GPU machine with Transformers 5.18.0 and the same packed
+train, tokenizer, and evaluation caches as the paper-scaling pipeline.
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 TRAIN_SECONDS=3600 EVAL_BATCH_SIZE=64 \
+bash qwen3_moe/run_hybrid_overnight.sh \
+  /mnt/token_cache_24k_v1_full_20261101 \
+  /mnt/tok_bpe24k_v1/tokenizer \
+  /mnt/1103_data/tok_bpe24k_v1_dolma3_mix_100M_a_npy
+```
+
+The optional fourth argument sets a new output directory. Add `--plan-only`
+to generate all eight configs without CUDA or caches. Each variant gets all
+eight GPUs for training. After all training attempts finish, successful
+checkpoints are exported and evaluated concurrently, one model per GPU.
+An individual failure is logged and the queue keeps going. The launcher exits
+nonzero after writing the final summary if a variant failed.
+
+Each variant has a 3e17 FLOPs cap and a one-hour training deadline by default.
+Training stops after the current complete update and saves a checkpoint at the
+deadline. Setup, the final validation and the checkpoint write can add time.
+The watchdog allows `TRAIN_SETUP_GRACE_SECONDS=600` beyond the deadline,
+then terminates a hung training job. `TRAIN_FLOPS` can set a smaller common
+cap so all runs reach 8K and finish cooldown sooner. `EVAL_TIMEOUT_SECONDS`
+limits each export and eval command separately. Evaluation uses `rmsnorm`
+fusion by default. Set `EVAL_FUSION_MODE=none` for stock evaluation.
+
+All variants keep eight attention blocks, width 256, Dense SwiGLU width 1024
+and routed expert width 512 with top-2. D means a Dense FFN and M means a
+routed FFN. The expert count applies to each M block.
+
+| Variant | Layer order | Experts | Comparison |
+| --- | --- | ---: | --- |
+| 01-front2-e24 | DDMMMMMM | 24 | Replace the first two routers and retain six MoE blocks |
+| 02-front4-e24 | DDDDMMMM | 24 | Test four Dense blocks before MoE |
+| 03-back4-e24 | MMMMDDDD | 24 | Compare with 02 to reverse the layer placement at fixed capacity |
+| 04-alternate-e24 | DMDMDMDM | 24 | Compare with 02 and 03 to test distributed routing depth |
+| 05-bookend-e24 | DDMMMMDD | 24 | Compare with 02 to test Dense input and output blocks |
+| 06-front4-e46 | DDDDMMMM | 46 | Compare with 02 to restore the original all-MoE FFN parameter budget |
+| 07-alternate-e46 | DMDMDMDM | 46 | Compare with 04 for restored capacity, and 06 for placement |
+| 08-front6-e90 | DDDDDDMM | 90 | Concentrate the original FFN parameter budget in two routed layers |
+
+The 46- and 90-expert variants match the 24-expert all-MoE baseline's total
+FFN weights, counting Dense FFNs, and differ slightly in router weights.
+The FLOPs ledger separately counts Dense FFNs, active experts, and routing.
+The run directory contains per-variant `training.yaml`, `train.log`,
+`export.log`, `eval.log`, `flops-report.json`, and `eval-result.json` as
+those phases finish. `summary.json` tracks failures, actual steps and FLOPs,
+last training context, BPB, forward seconds, and EvalTime. Time-limited
+checkpoints have audited partial FLOPs. Compare them at matched actual
+training budgets and context stages for architecture-only conclusions.

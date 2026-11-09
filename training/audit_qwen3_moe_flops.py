@@ -15,7 +15,7 @@ from qwen3_moe_flops import PROTOCOL, REFERENCE_SHA256
 from qwen3_moe_rules import validate_family_settings
 
 
-def audit(settings, metrics_path):
+def audit(settings, metrics_path, *, allow_time_limit=False):
     validate_family_settings(settings)
     training = settings["training"]
     world = settings["submission"]["data_parallel_size"]
@@ -24,11 +24,13 @@ def audit(settings, metrics_path):
     if settings["budget"].get("flops_protocol") != PROTOCOL:
         raise ValueError("A reference-based Qwen3 MoE FLOPs protocol is required")
     total = rows = 0
+    time_limit_seen = False
     with Path(metrics_path).open() as stream:
         for line in stream:
             if not line.strip():
                 continue
             row = json.loads(line)
+            time_limit_seen = row.get("train/stop_reason") == "time_limit"
             step = row.get("step")
             if isinstance(step, bool) or not isinstance(step, int) or step != rows + 1 or step > training["max_steps"]:
                 raise ValueError("Metrics must cover steps 1..final once, without gaps or duplicates")
@@ -48,20 +50,24 @@ def audit(settings, metrics_path):
             if row.get("train/completed_flops") != total:
                 raise ValueError(f"Step {step}: logged cumulative FLOPs disagree with the reference ledger")
             rows += 1
-    if rows != training["max_steps"]:
+    complete = rows == training["max_steps"]
+    if not complete and not (allow_time_limit and time_limit_seen and rows > 0):
         raise ValueError("Training path is incomplete; do not substitute planned FLOPs for actual completed work")
     target = settings["budget"]["total_training_flops"]
-    if not 99 * target <= 100 * total <= 101 * target:
-        raise ValueError("Logged training path falls outside the supplied tier's +/-1% interval")
+    within_one_percent = 99 * target <= 100 * total <= 101 * target
+    if complete and not within_one_percent:
+        raise ValueError("Logged training path falls outside the target FLOPs +/-1% interval")
     return {
-        "status": "passed_log_path_audit", "organizer_certified": False,
+        "status": "passed_log_path_audit" if complete else "passed_time_limited_prefix_audit",
+        "organizer_certified": False,
         "tier": settings["submission"]["budget_tier"],
         "architecture_family_id": settings["architecture_family"]["family_id"],
         "flops_protocol": PROTOCOL, "reference_function_sha256": REFERENCE_SHA256,
         "counter_code_sha256": hashlib.sha256((Path(__file__).parent / "src/qwen3_moe_flops.py").read_bytes()).hexdigest(),
         "completed_optimizer_steps": rows, "actual_training_flops": total,
         "training_tokens": rows * settings["scaling"]["tokens_per_update"],
-        "target_flops": target, "within_one_percent": True,
+        "final_context_length": stage["length"], "elapsed_seconds": row.get("elapsed_seconds"),
+        "target_flops": target, "within_one_percent": within_one_percent,
         "scalar_costs": {"exp": 1, "log": 1, "divide": 1},
         "scalar_costs_status": "Explicit convention; not specified by the supplied rule",
         "limitations": "Audits the complete logged successful-update path; unlogged failed attempts cannot be inferred. Organizer review remains separate.",
@@ -73,11 +79,14 @@ def main(argv=None):
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--metrics", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--allow-time-limit", action="store_true",
+                        help="Report an audited prefix if the trainer saved and stopped at its deadline")
     args = parser.parse_args(argv)
     if args.output.exists():
         parser.error(f"Output already exists: {args.output}")
     try:
-        report = audit(yaml.safe_load(args.config.read_text()), args.metrics)
+        report = audit(yaml.safe_load(args.config.read_text()), args.metrics,
+                       allow_time_limit=args.allow_time_limit)
     except (ValueError, KeyError) as error:
         parser.error(str(error))
     report.update(config=str(args.config.resolve()), metrics=str(args.metrics.resolve()),

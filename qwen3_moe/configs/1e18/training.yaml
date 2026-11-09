@@ -205,8 +205,9 @@ architecture_family:
       K follows the declared size rule
     shared_experts: 0
   transformers_version: 5.18.0
-  model_code_sha256: 4f197b68ed8472a0d5d2916a729559edb20c849c5b40597c0e1a24b7279d126c
-  acceleration_code_sha256: 1902de1e99b1a324229757850ddd45c172f9e37019177e2b214fa1d7060c396f
+  model_code_sha256: 4243c6e8762fe47a5b0f0eecdd7a80c99a06c10d7b4c985ebc812118e7618f9a
+  acceleration_code_sha256: 94783db054ebcd44928893d47d95ff4c22956310435ffe548c37af377e206157
   base_config_sha256: 4bc0edba5da131c13990e9da2a3dc970726a3c21eb8a24aee747dad824daeec7
-  generation_code_sha256: 12355112c4d291e50b277282a2cc2801023cc577990b8a3dfcac32d10b18424b
-  family_id: 109b0c3dac22760311c367617b8e37ecca65dfcbf865e20b512b07ba662afe88
+  generation_code_sha256: ad4033899702a2dfd6558e782b3a1e8011a05f5e6a8d41970a1552fe7bf94921
+  layer_pattern_code_sha256: 80281a4e51bd31d797f421cc18a008256e27286c4d312322fbfe86139d8dac3e
+  family_id: d35f80b4b10aad05c7bf2c8f19ce2a192fd83a378b7ca31ddd3c397744210860

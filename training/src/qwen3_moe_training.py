@@ -8,6 +8,8 @@ from torch import nn
 from torch.nn.attention import SDPBackend, sdpa_kernel
 from transformers import AutoModelForCausalLM, Qwen3MoeConfig
 
+from qwen3_moe_layers import qwen3_moe_layer_pattern
+
 
 class Qwen3MoeTrainingConfig:
     def __init__(self, hf_config):
@@ -66,9 +68,10 @@ class AccumulatedRouterBalance:
     def __init__(self, config, device):
         self.top_k = config.num_experts_per_tok
         self.num_experts = config.num_experts
-        self.counts = torch.zeros(
-            config.num_hidden_layers, self.num_experts, device=device, dtype=torch.int64,
-        )
+        moe_layers = sum(qwen3_moe_layer_pattern(config))
+        if not moe_layers:
+            raise ValueError("Router balance requires at least one MoE layer")
+        self.counts = torch.zeros(moe_layers, self.num_experts, device=device, dtype=torch.int64)
         self.world_size = dist.get_world_size() if dist.is_initialized() else 1
         self.tokens = 0
 
