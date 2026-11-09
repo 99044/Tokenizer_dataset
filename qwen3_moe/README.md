@@ -260,6 +260,32 @@ claimed yet.
 
 ## Train, export and evaluate
 
+For **3e17 only**, the dedicated wrapper fixes the paper-scaling configuration
+and uses eight GPUs. Its three cache/tokenizer arguments match the archived
+A20M launcher; an optional fourth argument specifies a new output directory.
+Without it, the wrapper prints a unique directory under `runs/`. It completes
+all 8,716 optimizer updates, CPU HF export, packed BPB evaluation and the
+successful-training-path FLOPs audit:
+
+```bash
+git fetch origin
+git switch qwen3-moe-paper-scaling
+git pull --ff-only origin qwen3-moe-paper-scaling
+
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+EVAL_GPU=0 EVAL_BATCH_SIZE=64 \
+bash qwen3_moe/run_3e17.sh \
+  /mnt/token_cache_24k_v1_full_20261101 \
+  /mnt/tok_bpe24k_v1/tokenizer \
+  /mnt/1103_data/tok_bpe24k_v1_dolma3_mix_100M_a_npy
+```
+
+`EVAL_BATCH_SIZE=64` applies to evaluation only. The wrapper also accepts a
+fourth path, for example `/mnt/runs/qwen3-moe-paper-3e17-001`; it must not
+already exist. Results appear in `train/`, `hf-model/`, `eval-result.json`
+and `flops-report.json` under the printed directory. The shared pipeline
+checks the caches and tokenizer before starting training.
+
 Run each tier with a new output directory. All four commands use **24K**
 training/evaluation caches and the matching tokenizer, including `1e19`.
 
