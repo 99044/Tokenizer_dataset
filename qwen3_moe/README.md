@@ -280,12 +280,17 @@ its checkpoint with the new generated settings for exact resume.
 
 ## Train, export and evaluate
 
-For **3e17 only**, the dedicated wrapper fixes the paper-scaling configuration
-and uses eight GPUs. Its three cache/tokenizer arguments match the archived
-A20M launcher; an optional fourth argument specifies a new output directory.
-Without it, the wrapper prints a unique directory under `runs/`. It completes
-all 8,715 optimizer updates, CPU HF export, packed BPB evaluation and the
-successful-training-path FLOPs audit:
+The dedicated **3e17** wrapper runs the Dense-prefix experiment on eight GPUs.
+The first four FFNs are Dense SwiGLU. Each of the final four FFNs has 46
+experts in two groups, with one expert selected from each group per token.
+The original Hi-MoE router EMA and auxiliary losses apply to these four
+routed layers. The recipe uses the source Hi-MoE optimizer, learning-rate
+schedule and 2K/4K/8K curriculum with a recalculated 3e17 FLOPs cap.
+
+The wrapper takes three cache/tokenizer paths and an optional new output
+directory. Without it, the wrapper prints a unique directory under `runs/`.
+It trains to the planned budget, exports to HF on CPU, runs packed BPB
+evaluation and audits the completed FLOPs:
 
 ```bash
 git fetch origin
@@ -300,15 +305,19 @@ bash qwen3_moe/run_3e17.sh \
 ```
 
 `EVAL_BATCH_SIZE=64` applies to evaluation only. The wrapper also accepts a
-fourth path, for example `/mnt/runs/qwen3-moe-paper-3e17-001`; it must not
+fourth path, for example `/mnt/runs/qwen3-himoe-dense4-3e17-001`; it must not
 already exist. Results appear in `train/`, `hf-model/`, `eval-result.json`
 and `flops-report.json` under the printed directory. The shared pipeline
 checks the caches and tokenizer before starting training.
 Invalid evaluation batch sizes and fusion modes are also rejected before
 training, rather than after completing the training/export pipeline.
 
-Run each tier with a new output directory. All four commands use **24K**
-training/evaluation caches and the matching tokenizer, including `1e19`.
+Regenerate the checked-in Dense-prefix recipe with
+`python qwen3_moe/plan.py --tier 3e17 --dense-prefix --output-dir qwen3_moe/configs/dense-prefix`.
+
+The original four-tier all-Hi-MoE family is available through the commands
+below. Use a new output directory and the matching **24K** tokenizer and
+caches for every tier, including `1e19`.
 
 ```bash
 bash qwen3_moe/run_all.sh 3e17 "$TRAIN_CACHE" "$TOKENIZER_DIR" "$EVAL_CACHE" "$RUNS/3e17"

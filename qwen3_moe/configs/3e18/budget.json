@@ -9,7 +9,7 @@
   "active_non_vocabulary_parameters": 61221376,
   "active_non_vocabulary_fraction": 0.10164824655435796,
   "minimum_active_non_vocabulary_fraction": 0.1,
-  "architecture_family_id": "143f82292e736d10be9b057294602fb632d119363255e37c3cac46b7e91510cd",
+  "architecture_family_id": "c06f089ff70f372743ddad093af0f2094320d22fcf40faadb4447f0bf4c1cd15",
   "expert_granularity": "1/4",
   "expert_activation_sparsity": 11.75,
   "tokens_per_update": 1048576,
@@ -69,7 +69,7 @@
       "router_graph_audited": true,
       "official_ledger": false,
       "reference_function_sha256": "4d6e6daf89926f83f4e5009f337540cf1f16850e1b18d9b1c6cb6fb74b93fc97",
-      "counter_code_sha256": "b167889d21315662ed1836caa138c0ddfc81d75a5659faacbb954520c0dce030",
+      "counter_code_sha256": "a8e5f4240eca8cca409f1d7749ce7d35a9f101a8a2472cfc0ad21ee026068c50",
       "reference_source": "https://github.com/NVIDIA/Megatron-LM/blob/main/megatron/training/training.py",
       "megatron_reference_total": 4432406249472,
       "megatron_components": {
@@ -806,7 +806,7 @@
       "router_graph_audited": true,
       "official_ledger": false,
       "reference_function_sha256": "4d6e6daf89926f83f4e5009f337540cf1f16850e1b18d9b1c6cb6fb74b93fc97",
-      "counter_code_sha256": "b167889d21315662ed1836caa138c0ddfc81d75a5659faacbb954520c0dce030",
+      "counter_code_sha256": "a8e5f4240eca8cca409f1d7749ce7d35a9f101a8a2472cfc0ad21ee026068c50",
       "reference_source": "https://github.com/NVIDIA/Megatron-LM/blob/main/megatron/training/training.py",
       "megatron_reference_total": 5257039970304,
       "megatron_components": {
@@ -1543,7 +1543,7 @@
       "router_graph_audited": true,
       "official_ledger": false,
       "reference_function_sha256": "4d6e6daf89926f83f4e5009f337540cf1f16850e1b18d9b1c6cb6fb74b93fc97",
-      "counter_code_sha256": "b167889d21315662ed1836caa138c0ddfc81d75a5659faacbb954520c0dce030",
+      "counter_code_sha256": "a8e5f4240eca8cca409f1d7749ce7d35a9f101a8a2472cfc0ad21ee026068c50",
       "reference_source": "https://github.com/NVIDIA/Megatron-LM/blob/main/megatron/training/training.py",
       "megatron_reference_total": 6906307411968,
       "megatron_components": {

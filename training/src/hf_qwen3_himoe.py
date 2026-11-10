@@ -44,14 +44,24 @@ def _grouped_forward(self, hidden_states):
     return corrected, values.to(logits.dtype), indices
 
 
+def himoe_gates(model):
+    """Yield only the routers that exist in the decoder."""
+    for layer in model.model.layers:
+        gate = getattr(layer.mlp, "gate", None)
+        if gate is not None:
+            yield gate
+
+
 def install_himoe(model):
     settings = getattr(model.config, "hi_moe", None)
     if not settings:
         raise ValueError("missing hi_moe configuration")
     if settings["groups"] * settings["per_group"] != model.config.num_experts_per_tok:
         raise ValueError("Hi-MoE group Top-K must preserve the active expert count")
-    for layer in model.model.layers:
-        gate = layer.mlp.gate
+    gates = list(himoe_gates(model))
+    if not gates:
+        raise ValueError("Hi-MoE requires at least one routed layer")
+    for gate in gates:
         gate.himoe_settings = settings
         gate.register_buffer("himoe_logits_ema", torch.zeros(model.config.num_experts, dtype=torch.float32))
         gate.forward = MethodType(_grouped_forward, gate)

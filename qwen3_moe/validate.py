@@ -16,7 +16,7 @@ from qwen3_moe.plan import TIERS, make_recipe
 from fp32_master import FP32MasterWeights
 from optimizer_factory import build_optimizer
 from qwen3_moe_training import AccumulatedRouterBalance, Qwen3MoeTrainingConfig, himoe_regularizers, router_z_loss
-from hf_qwen3_himoe import Qwen3HiMoeForCausalLM
+from hf_qwen3_himoe import Qwen3HiMoeForCausalLM, himoe_gates
 from qwen3_moe_rules import validate_family_settings
 
 
@@ -24,8 +24,9 @@ def main():
     torch.set_num_threads(2)
     torch.manual_seed(42)
     reports = []
-    for tier in TIERS:
-        config, settings, budget = make_recipe(tier)
+    recipes = [(tier, False) for tier in TIERS] + [("3e17", True)]
+    for tier, dense_prefix in recipes:
+        config, settings, budget = make_recipe(tier, dense_prefix=dense_prefix)
         activation = validate_family_settings(settings, check_runtime=True)
         # Check the full production architecture without allocating its weights.
         with torch.device("meta"):
@@ -42,10 +43,14 @@ def main():
         assert total - vocabulary == activation["total_non_vocabulary_parameters"]
         assert active - vocabulary == activation["active_non_vocabulary_parameters"]
         assert 10 * (active - vocabulary) >= total - vocabulary
+        assert [index for index, layer in enumerate(lm.model.layers) if not hasattr(layer.mlp, "gate")] == (
+            config.get("mlp_only_layers", [])
+        )
         del lm, experts
 
         # Exercise every selected top-k using the real masked-CE/router/FP32 SOAP path.
-        tiny = dict(config, hidden_size=16, num_hidden_layers=2, num_attention_heads=2,
+        tiny_layers = config["num_hidden_layers"] if dense_prefix else 2
+        tiny = dict(config, hidden_size=16, num_hidden_layers=tiny_layers, num_attention_heads=2,
                     num_key_value_heads=1, head_dim=8, vocab_size=32,
                     intermediate_size=64, moe_intermediate_size=64 // config["num_experts_per_tok"])
         declaration = deepcopy(tiny)
@@ -53,6 +58,9 @@ def main():
         assert tiny == declaration
         model = training_config.build()
         model.init_weights(8192, torch.device("cpu"))
+        gates = list(himoe_gates(model.lm))
+        assert len(gates) == tiny_layers - len(config.get("mlp_only_layers", []))
+        assert all(gate.himoe_logits_ema.dtype == torch.float32 for gate in gates)
         master = FP32MasterWeights(model)
         optimizer, _ = build_optimizer(model, settings, parameter_map=master.parameter_map)
         optimizer = master.install(optimizer)
@@ -75,12 +83,12 @@ def main():
                 loss.backward()
             assert torch.all(balance.counts.sum(-1) == 32 * config["num_experts_per_tok"])
             assert all(p.grad is None or torch.isfinite(p.grad).all() for p in model.parameters())
-            assert all(layer.mlp.gate.weight.grad.abs().sum() > 0 for layer in model.lm.model.layers)
+            assert all(gate.weight.grad.abs().sum() > 0 for gate in gates)
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
         assert not torch.equal(before, model.lm.lm_head.weight)
         master.validate_checkpoint(dict(model=model.state_dict(), fp32_master=master.state_dict()))
-        reports.append(dict(tier=tier, total_parameters=total, active_parameters=active,
+        reports.append(dict(tier=tier, dense_prefix=dense_prefix, total_parameters=total, active_parameters=active,
                             active_non_vocabulary_fraction=activation["active_non_vocabulary_fraction"],
                             top_k=config["num_experts_per_tok"], masked_ce_router_soap="passed"))
     print(json.dumps(dict(status="passed", torch=torch.__version__, transformers=transformers.__version__,

@@ -12,6 +12,8 @@ from types import MethodType
 import torch
 import torch.nn.functional as F
 
+from qwen3_moe_layers import qwen3_moe_layer_pattern
+
 
 def swiglu(gate_up):
     gate, up = gate_up.chunk(2, dim=-1)
@@ -142,8 +144,8 @@ def install_h800_acceleration(model, options=None):
                 except Exception as error:
                     report["fallback_reasons"].append(f"SwiGLU compilation: {type(error).__name__}: {error}")
             modules = [m for m in model.modules() if type(m).__name__ == "Qwen3MoeExperts"]
-            if len(modules) != model.config.num_hidden_layers:
-                raise RuntimeError("Expected homogeneous stock Qwen3 MoE experts")
+            if len(modules) != sum(qwen3_moe_layer_pattern(model.config)):
+                raise RuntimeError("Stock Qwen3 MoE expert modules disagree with the configured routed layers")
             for module in modules:
                 module._h800_gmm = gmm
                 module._h800_activation = activation

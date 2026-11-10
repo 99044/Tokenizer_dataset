@@ -8,7 +8,8 @@ from torch import nn
 from torch.nn.attention import SDPBackend, sdpa_kernel
 from transformers import AutoModelForCausalLM, Qwen3MoeConfig
 
-from hf_qwen3_himoe import Qwen3HiMoeForCausalLM, grouped_topk
+from hf_qwen3_himoe import Qwen3HiMoeForCausalLM, grouped_topk, himoe_gates
+from qwen3_moe_layers import qwen3_moe_layer_pattern
 
 
 class Qwen3MoeTrainingConfig:
@@ -41,8 +42,8 @@ class Qwen3MoeTrainingModel(nn.Module):
         inv_freq = rotary.inv_freq
         self.to(device=device, dtype=torch.bfloat16)
         if getattr(self.lm.config, "hi_moe", None):
-            for layer in self.lm.model.layers:
-                layer.mlp.gate.himoe_logits_ema = layer.mlp.gate.himoe_logits_ema.float()
+            for gate in himoe_gates(self.lm):
+                gate.himoe_logits_ema = gate.himoe_logits_ema.float()
         rotary.inv_freq = inv_freq.to(device=device, dtype=torch.float32)
         rotary.original_inv_freq = rotary.inv_freq.clone()
 
@@ -75,7 +76,7 @@ class AccumulatedRouterBalance:
         self.num_experts = config.num_experts
         self.himoe = getattr(config, "hi_moe", None)
         self.counts = torch.zeros(
-            config.num_hidden_layers, self.num_experts, device=device, dtype=torch.int64,
+            sum(qwen3_moe_layer_pattern(config)), self.num_experts, device=device, dtype=torch.int64,
         )
         self.world_size = dist.get_world_size() if dist.is_initialized() else 1
         self.tokens = 0
@@ -133,7 +134,7 @@ def synchronize_himoe_ema(lm):
     """Average rank-local router EMAs once per optimizer update."""
     if not getattr(lm.config, "hi_moe", None) or not dist.is_initialized():
         return
-    buffers = [layer.mlp.gate.himoe_logits_ema for layer in lm.model.layers]
+    buffers = [gate.himoe_logits_ema for gate in himoe_gates(lm)]
     joined = torch.cat(buffers)
     dist.all_reduce(joined, op=dist.ReduceOp.SUM)
     joined.div_(dist.get_world_size())

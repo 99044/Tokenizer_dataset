@@ -50,6 +50,29 @@ class RecipeTests(unittest.TestCase):
                 self.assertAlmostEqual(curriculum_lr_factor(settings, training["max_steps"]), 0.01)
                 self.assertGreater(budget["training_tokens_per_active_parameter"], 20)
 
+    def test_dense_prefix_has_a_reproducible_separate_3e17_recipe(self):
+        config, settings, budget = make_recipe("3e17", dense_prefix=True)
+        folder = ROOT / "configs/dense-prefix/3e17"
+        self.assertEqual(config, json.loads((folder / "config.json").read_text()))
+        self.assertEqual(settings, yaml.safe_load((folder / "training.yaml").read_text()))
+        self.assertEqual(budget, json.loads((folder / "budget.json").read_text()))
+        self.assertEqual(config["mlp_only_layers"], [0, 1, 2, 3])
+        self.assertEqual(config["num_experts"], 46)
+        self.assertEqual((config["hi_moe"]["groups"], config["hi_moe"]["per_group"]), (2, 1))
+        baseline, _, baseline_budget = make_recipe("3e17")
+        self.assertEqual(config["hi_moe"], baseline["hi_moe"])
+        self.assertNotEqual(budget["architecture_family_id"], baseline_budget["architecture_family_id"])
+        self.assertEqual(budget["reference_8k"]["parameters_by_component"]["swiglu_projections"],
+                         baseline_budget["reference_8k"]["parameters_by_component"]["swiglu_projections"])
+        validate_family_settings(settings)
+        steps = settings["training"]["max_steps"]
+        validate_curriculum(settings, 8, 1, 4, steps)
+        spent = curriculum_completed_flops(settings, steps)
+        self.assertLessEqual(spent, TIERS["3e17"]["flops"])
+        self.assertGreater(spent, TIERS["3e17"]["flops"] * 0.99)
+        with self.assertRaisesRegex(ValueError, "only defined for 3e17"):
+            make_recipe("1e18", dense_prefix=True)
+
     def test_granularity_candidates_preserve_active_ffn_compute(self):
         for tier in TIERS:
             configs = [make_recipe(tier, granularity_shift=shift)[0] for shift in (-1, 0, 1)]

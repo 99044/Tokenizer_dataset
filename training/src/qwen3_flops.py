@@ -2,6 +2,7 @@
 
 from graph_accounting import gemm_operations, operation_flops
 from hybrid_flops import Operations
+from qwen3_moe_layers import qwen3_moe_layer_pattern
 
 
 def parameters(model):
@@ -17,10 +18,10 @@ def parameters(model):
 
 
 def qwen3_moe_parameters(config):
-    """Exact counts for homogeneous, fixed-top-k MoE in every decoder layer."""
-    if config.get("decoder_sparse_step", 1) != 1 or config.get("mlp_only_layers", []):
-        raise ValueError("Parameter accounting requires an MoE in every layer")
-    layers, hidden = config["num_hidden_layers"], config["hidden_size"]
+    """Exact counts for Dense FFNs and fixed-top-k MoE blocks."""
+    pattern = qwen3_moe_layer_pattern(config)
+    layers, routed_layers, hidden = len(pattern), sum(pattern), config["hidden_size"]
+    dense_layers = layers - routed_layers
     experts, top_k = config["num_experts"], config["num_experts_per_tok"]
     width = config["moe_intermediate_size"]
     if not 1 <= top_k <= experts:
@@ -36,8 +37,10 @@ def qwen3_moe_parameters(config):
     if not tied:
         del active["embedding_and_tied_lm_head"]
         active.update(token_embedding=embedding, lm_head=embedding)
-    active["router"] = layers * hidden * experts
-    total = dict(active, swiglu_projections=layers * experts * 3 * hidden * width)
+    active["router"] = routed_layers * hidden * experts
+    dense_ffn = dense_layers * 3 * hidden * config["intermediate_size"] if dense_layers else 0
+    active["swiglu_projections"] = dense_ffn + routed_layers * top_k * 3 * hidden * width
+    total = dict(active, swiglu_projections=dense_ffn + routed_layers * experts * 3 * hidden * width)
     vocabulary = embedding * (1 if tied else 2)
     including = "including_tied_vocab" if tied else "including_input_and_output_vocab"
     excluding = "excluding_tied_vocab" if tied else "excluding_input_and_output_vocab"
@@ -152,6 +155,8 @@ def qwen3_moe_cost_breakdown(config, sequence, *, protocol=None, micro_batch_siz
         if protocol != PROTOCOL:
             raise ValueError(f"Unknown Qwen3 MoE FLOPs protocol: {protocol}")
         return cost_breakdown(config, sequence, micro_batch_size)
+    if not all(qwen3_moe_layer_pattern(config)):
+        raise ValueError("Mixed Dense/MoE FLOPs require the Megatron-reference protocol")
     layers = config["num_hidden_layers"]
     hidden = config["hidden_size"]
     experts = config["num_experts"]

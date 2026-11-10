@@ -40,11 +40,31 @@ class FlopsTests(unittest.TestCase):
                     self.assertIs(audit["reference_matched"], True)
                     self.assertIs(audit["router_graph_audited"], True)
 
+    def test_dense_prefix_counts_only_four_himoe_routers(self):
+        _, _, budget = make_recipe("3e17", dense_prefix=True)
+        _, _, baseline = make_recipe("3e17")
+        for length in (2048, 4096, 8192):
+            with self.subTest(length=length):
+                audit = budget["flops_audit"][str(length)]
+                original = baseline["flops_audit"][str(length)]
+                components = audit["megatron_components"]
+                self.assertEqual(components["dense_ffn_projections"], components["active_expert_projections"])
+                self.assertEqual(audit["megatron_reference_total"], original["megatron_reference_total"])
+                self.assertEqual(audit["router_projection_gemm"], 6 * 8192 * 4 * 256 * 46)
+                self.assertEqual(sum(audit["components"].values()), audit["estimated_total"])
+                operations = {op["name"]: op for op in audit["router_operations"]}
+                self.assertEqual(operations["himoe.ema_update"]["calls"], 4)
+                self.assertEqual(operations["z_loss.logsumexp.exp"]["calls"], 4)
+
     def test_auxiliary_scalars_are_counted_per_microbatch_not_per_sequence(self):
         config, _, _ = make_recipe("3e17")
         single = qwen3_moe_cost(config, 2048, protocol=PROTOCOL)[0]
         double = qwen3_moe_cost(config, 2048, protocol=PROTOCOL, micro_batch_size=2)[0]
-        constant = config["num_hidden_layers"] * (4 * config["num_experts"] + 3) + 8
+        # The Hi-MoE EMA ledger adds three constant scalar operations per
+        # expert, net of the token-sum reduction's -E term.
+        standard_per_layer = 4 * config["num_experts"] + 3
+        himoe_ema_per_layer = 3 * config["num_experts"]
+        constant = config["num_hidden_layers"] * (standard_per_layer + himoe_ema_per_layer) + 8
         self.assertEqual(2 * single - double, constant)
 
     def test_reference_snapshot_is_the_previously_reviewed_function(self):

@@ -9,14 +9,17 @@ from pathlib import Path
 
 from qwen3_flops import qwen3_moe_parameters, validate_moe_activation_ratio
 from qwen3_moe_flops import PROTOCOL
+from qwen3_moe_layers import qwen3_moe_layer_pattern
 
 ROOT = Path(__file__).resolve().parents[2]
 HIDDEN_BY_TIER = {"3e17": 256, "1e18": 384, "3e18": 512, "1e19": 768}
+DENSE_PREFIX_TIER = "3e17"
 
 
 def maximum_expert_count(config):
     """Largest integer E with (A + E*R + K*P)/(A + E*(R+P)) >= 1/10."""
-    layers, hidden, top_k = (config[k] for k in ("num_hidden_layers", "hidden_size", "num_experts_per_tok"))
+    layers = sum(qwen3_moe_layer_pattern(config))
+    hidden, top_k = config["hidden_size"], config["num_experts_per_tok"]
     per_expert = 3 * layers * hidden * config["moe_intermediate_size"]
     per_router_row = layers * hidden
     dense = qwen3_moe_parameters(dict(config, num_experts=top_k))["total_non_vocabulary_parameters"]
@@ -29,7 +32,7 @@ def maximum_expert_count(config):
 
 def architecture_for_hidden(hidden, family):
     """Only size fields vary; layer types, connections and routing stay fixed."""
-    if hidden not in HIDDEN_BY_TIER.values():
+    if hidden not in family["hidden_by_tier"].values():
         raise ValueError("Hidden dimension is outside the predeclared scale ladder")
     config = json.loads((ROOT / "qwen3_moe_a20m/config.json").read_text())
     # At d=256/384/512/768, default K is 2/2/4/8. The algorithm stays fixed.
@@ -42,12 +45,16 @@ def architecture_for_hidden(hidden, family):
         num_experts=top_k, num_experts_per_tok=top_k,
         router_aux_loss_coef=0.001, router_z_loss_coef=0.001,
     )
-    maximum = maximum_expert_count(config)
-    count = int(maximum * Fraction(str(family["expert_capacity_fraction"])))
-    alignment = family["expert_alignment"]
-    config["num_experts"] = count // alignment * alignment
-    if config["num_experts"] <= top_k:
-        raise ValueError("Capacity fraction/alignment leaves too few experts")
+    if family.get("dense_prefix"):
+        rules = family["generation_rules"]
+        config.update(mlp_only_layers=list(rules["mlp_only_layers"]), num_experts=rules["expert_count"])
+    else:
+        maximum = maximum_expert_count(config)
+        count = int(maximum * Fraction(str(family["expert_capacity_fraction"])))
+        alignment = family["expert_alignment"]
+        config["num_experts"] = count // alignment * alignment
+        if config["num_experts"] <= top_k:
+            raise ValueError("Capacity fraction/alignment leaves too few experts")
     groups = 2 if top_k == 2 else 4
     config["hi_moe"] = {
         "groups": groups, "per_group": top_k // groups,
@@ -57,7 +64,7 @@ def architecture_for_hidden(hidden, family):
     return config
 
 
-def make_family(granularity_shift=0, expert_capacity_fraction=1.0, expert_alignment=1):
+def make_family(granularity_shift=0, expert_capacity_fraction=1.0, expert_alignment=1, *, dense_prefix=False):
     if isinstance(granularity_shift, bool) or not isinstance(granularity_shift, int) or granularity_shift not in (-1, 0, 1):
         raise ValueError("Granularity shift must be -1, 0 or 1")
     if (isinstance(expert_capacity_fraction, bool) or not isinstance(expert_capacity_fraction, (int, float))
@@ -65,6 +72,9 @@ def make_family(granularity_shift=0, expert_capacity_fraction=1.0, expert_alignm
         raise ValueError("Expert capacity fraction must lie in (0, 1]")
     if isinstance(expert_alignment, bool) or expert_alignment not in (1, 4, 8, 16):
         raise ValueError("Expert alignment must be 1, 4, 8 or 16")
+    if type(dense_prefix) is not bool or (dense_prefix and
+            (granularity_shift, expert_capacity_fraction, expert_alignment) != (0, 1.0, 1)):
+        raise ValueError("The 3e17 Dense-prefix recipe has fixed expert settings")
     family = {
         "schema": "qwen3-moe-scaling-v2",
         "hidden_by_tier": dict(HIDDEN_BY_TIER),
@@ -97,8 +107,18 @@ def make_family(granularity_shift=0, expert_capacity_fraction=1.0, expert_alignm
         "acceleration_code_sha256": hashlib.sha256((ROOT / "training/src/h800_acceleration.py").read_bytes()).hexdigest(),
         "base_config_sha256": hashlib.sha256((ROOT / "qwen3_moe_a20m/config.json").read_bytes()).hexdigest(),
         "generation_code_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        "layer_pattern_code_sha256": hashlib.sha256(
+            Path(__file__).with_name("qwen3_moe_layers.py").read_bytes()
+        ).hexdigest(),
     }
-    for hidden in HIDDEN_BY_TIER.values():
+    if dense_prefix:
+        family["dense_prefix"] = True
+        family["hidden_by_tier"] = {DENSE_PREFIX_TIER: HIDDEN_BY_TIER[DENSE_PREFIX_TIER]}
+        family["generation_rules"].update(mlp_only_layers=list(range(4)), expert_count=46)
+        family["generation_rules"].pop("E_max")
+        family["fixed_mechanisms"]["layer_type"] = "four Dense FFNs followed by four Hi-MoE FFNs"
+        family["fixed_mechanisms"]["connections"] = "pre-norm residual attention followed by residual FFN"
+    for hidden in family["hidden_by_tier"].values():
         validate_moe_activation_ratio(architecture_for_hidden(hidden, family))
     family["family_id"] = hashlib.sha256(json.dumps(family, sort_keys=True).encode()).hexdigest()
     return family
@@ -108,16 +128,18 @@ def validate_family_settings(settings, *, check_runtime=False):
     family = settings.get("architecture_family")
     if not isinstance(family, dict):
         raise ValueError("Missing predeclared architecture_family")
-    expected = make_family(family.get("granularity_shift"), family.get("expert_capacity_fraction"), family.get("expert_alignment"))
+    expected = make_family(family.get("granularity_shift"), family.get("expert_capacity_fraction"),
+                           family.get("expert_alignment"), dense_prefix=family.get("dense_prefix", False))
     if family != expected:
         raise ValueError("Architecture family, generation rules or model source version changed")
     if settings.get("budget", {}).get("flops_protocol") != PROTOCOL:
         raise ValueError("This family requires the competition-reference MoE FLOPs protocol")
     tier = settings["submission"]["budget_tier"]
-    if tier not in HIDDEN_BY_TIER:
-        raise ValueError("Unknown architecture scale")
+    sizes = expected["hidden_by_tier"]
+    if tier not in sizes:
+        raise ValueError("Unknown architecture scale for this family")
     config = settings["model"]["hf_config"]
-    if config != architecture_for_hidden(HIDDEN_BY_TIER[tier], expected):
+    if config != architecture_for_hidden(sizes[tier], expected):
         raise ValueError("HF architecture differs from its predeclared scaling rule")
     if check_runtime and version("transformers") != family["transformers_version"]:
         raise ValueError("Runtime Transformers version differs from the declared model code version")
